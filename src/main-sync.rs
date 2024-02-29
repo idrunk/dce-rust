@@ -1,6 +1,6 @@
 use dce_cli::protocol::{CliRaw, CliProtocol};
-use dce_router::api;
-use dce_router::router::router::Router;
+use dce_macro::api;
+use dce_router::router::Router;
 
 fn main() {
     let router = Router::new()

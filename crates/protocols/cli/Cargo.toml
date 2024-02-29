@@ -16,5 +16,7 @@ async = ["dce-router/async", "async-trait"]
 
 [dependencies]
 async-trait = { version = "0.1.73", optional = true }
+dce-util = { path = "../../util", version = "0.*" }
+dce-macro = { path = "../../macro", version = "0.*" }
 dce-router = { path = "../../router", version = "0.*", default-features = false }
 log = "0.4.20"

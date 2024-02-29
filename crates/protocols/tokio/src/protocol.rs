@@ -10,11 +10,11 @@ use tokio::net::TcpStream;
 use tokio_util::codec::{BytesCodec, Framed};
 use tokio_util::udp::UdpFramed;
 use bytes::{BufMut, BytesMut};
-use dce_router::router::protocol::{CustomizedProtocolRawRequest, RoutableProtocol};
-use dce_router::router::request::{RawRequest, Request, RequestContext};
-use dce_router::router::router::Router;
-use dce_router::router::serializer::Serialized;
-use dce_router::util::DceResult;
+use dce_router::protocol::{CustomizedProtocolRawRequest, RoutableProtocol};
+use dce_router::request::{RawRequest, Request, RequestContext};
+use dce_router::router::Router;
+use dce_router::serializer::Serialized;
+use dce_util::mixed::DceResult;
 
 
 pub type SemiTcpRaw = Request<CustomizedProtocolRawRequest<SemiTcpProtocol>, (), (), (), ()>;

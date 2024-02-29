@@ -16,6 +16,8 @@ crate-type = ["lib"]
 [dependencies]
 hyper = { version = "1.2.0", features = ["http1", "http2", "server"] }
 http-body-util = "0.1"
+dce-util = { path = "../../util", version = "0.*" }
+dce-macro = { path = "../../macro", version = "0.*" }
 dce-router = { path = "../../router", version = "0.*" }
 async-trait = "0.1.73"
 log = "0.4.20"

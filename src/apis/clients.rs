@@ -10,12 +10,12 @@ use tokio_util::codec::{BytesCodec, Decoder, FramedRead, FramedWrite};
 use tokio_util::udp::UdpFramed;
 use url::Url;
 use dce_cli::protocol::{CliProtocol, CliRaw};
-use dce_router::{api, closed_err};
-use dce_router::router::protocol::CustomizedProtocolRawRequest;
-use dce_router::router::router::Router;
-use dce_router::router::serializer::Serialized;
-use dce_router::util::DceErr;
+use dce_router::protocol::CustomizedProtocolRawRequest;
+use dce_router::router::Router;
+use dce_router::serializer::Serialized;
+use dce_util::mixed::DceErr;
 use rand::random;
+use dce_macro::{api, closed_err};
 
 pub fn append(router: Router<CustomizedProtocolRawRequest<CliProtocol>>) -> Router<CustomizedProtocolRawRequest<CliProtocol>> {
     router.push(tcp_interactive)

@@ -2,11 +2,10 @@ use std::any::{Any, type_name};
 use std::fmt::{Debug, Display, Formatter};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use dce_router_macro::closed_err;
-use crate::router::api::ToStruct;
-use crate::util::DceResult;
-use crate::router::request::ResponseStatus;
-use crate::util::mem::self_transmute;
+use crate::api::ToStruct;
+use crate::request::ResponseStatus;
+use dce_util::mixed::{DceErr, DceResult};
+use dce_util::mem::self_transmute;
 
 #[derive(Debug)]
 pub enum Serializable<Dto> {
@@ -109,7 +108,7 @@ impl<Dto: for<'a> Deserialize<'a>> Deserializer<Dto> for JsonSerializer {
         Ok((match value {
             Serialized::String(v) => serde_json::from_str(v.as_str()),
             Serialized::Bytes(v) => serde_json::from_slice(v.as_ref()),
-        }).or(Err(closed_err!("Serialized cannot deserialize to ReqDto")))?)
+        }).or(Err(DceErr::closed(0, "Serialized cannot deserialize to ReqDto".to_owned())))?)
     }
 }
 
@@ -118,7 +117,7 @@ impl<Dto: Serialize + 'static> Serializer<Dto> for JsonSerializer {
         Ok(Serialized::String(match value {
             Serializable::Dto(v) => serde_json::to_string::<Dto>(&v),
             Serializable::Status(v) => serde_json::to_string::<ResponseStatus<Dto>>(&v),
-        }.or(Err(closed_err!("RespDto not a jsonable")))?))
+        }.or(Err(DceErr::closed(0, "RespDto not a jsonable".to_owned())))?))
     }
 }
 

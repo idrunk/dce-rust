@@ -45,12 +45,12 @@ impl Api {
         func.sig.ident = Ident::new(fn_name.as_str(), Span::call_site());
         func.sig.output =  ReturnType::Type(parse_quote!(->), Box::new(Type::Path(TypePath {
             qself: None,
-            path: Self::str_gen_path(vec![("dce_router", None), ("util", None), ("DceResult", Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(
+            path: Self::str_gen_path(vec![("dce_util", None), ("mixed", None), ("DceResult", Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(
                 punctuated_create!(GenericArgument::Type(Type::Path(TypePath{ qself: None, path: Self::str_gen_path(
                     vec![("Option", Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(punctuated_create!(
                         GenericArgument::Type(Type::Path(TypePath{
-                            qself: Some(QSelf { lt_token: parse_quote!(<), ty: Box::new(request_type), position: 4, as_token: Some(parse_quote!(as)), gt_token: parse_quote!(>)}),
-                            path: Self::str_gen_path(vec![("dce_router", None), ("router", None), ("request", None), ("RawRequest", None), ("Resp", None)])
+                            qself: Some(QSelf { lt_token: parse_quote!(<), ty: Box::new(request_type), position: 3, as_token: Some(parse_quote!(as)), gt_token: parse_quote!(>)}),
+                            path: Self::str_gen_path(vec![("dce_router", None), ("request", None), ("RawRequest", None), ("Resp", None)])
                         }))
                     ), None))))]
                 ) }))), None
@@ -81,7 +81,7 @@ impl Api {
 
         let controller = if func.sig.asyncness.is_none() {
             Self::gen_expr_call(punctuated_create!(Expr::Path(ExprPath{attrs: vec![], qself: None, path: Self::str_gen_path(vec![(fn_name, None)])})),
-                                vec![("dce_router", None), ("router", None), ("api", None), ("Controller", None), ("Sync", None)], None)
+                                vec![("dce_router", None), ("api", None), ("Controller", None), ("Sync", None)], None)
         } else {
             let path = Self::str_gen_path(vec![("var", None)]);
             Self::gen_expr_call(punctuated_create!(Self::gen_expr_call(punctuated_create!(Expr::Closure(ExprClosure {
@@ -90,7 +90,7 @@ impl Api {
                 body: Box::new(Self::gen_expr_call(
                     punctuated_create!(Self::gen_expr_call(punctuated_create!(Expr::Path(ExprPath { attrs: vec![], qself: None, path})), vec![(fn_name, None)], None)),
                     vec![("Box", None), ("pin", None)], None)),
-            })), vec![("Box", None), ("new", None)], None)), vec![("dce_router", None), ("router", None), ("api", None), ("Controller", None), ("Async", None)], None)
+            })), vec![("Box", None), ("new", None)], None)), vec![("dce_router", None), ("api", None), ("Controller", None), ("Async", None)], None)
         };
         Ok((controller, method_extras, generic_segments))
     }
@@ -141,9 +141,9 @@ impl Api {
         let (last_seg_idx, paths) = (stru.path.segments.len() - 1, stru.path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>());
         Self::gen_expr_call(
             punctuated_create!(Expr::Array(ExprArray { attrs: vec![], bracket_token: Default::default(), elems: props, })),
-            vec![("dce_router", None),("router", None),("api", None),("ToStruct", None),("from", None)],
+            vec![("dce_router", None), ("api", None), ("ToStruct", None), ("from", None)],
             Some(Self::gen_qself(paths.iter().enumerate().map(|(idx, path)| (path.as_str(), if generics.is_empty() || idx < last_seg_idx {None} else {
-                Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(generics.clone(), None)))})).collect(), 4)),
+                Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(generics.clone(), None)))})).collect(), 3)),
         )
     }
 
@@ -176,7 +176,7 @@ impl Api {
             _ => Self::gen_bracket_macro(vec![("vec", None)], Self::gen_expr_call(punctuated_create!(Self::struct_to_converter(&ExprStruct {
                 attrs: vec![],
                 qself: None,
-                path: Self::str_gen_path(vec![("dce_router", None), ("router", None), ("serializer", None), ("UnreachableSerializer", None)]),
+                path: Self::str_gen_path(vec![("dce_router", None), ("serializer", None), ("UnreachableSerializer", None)]),
                 brace_token: Default::default(),
                 fields: Default::default(),
                 dot2_token: None,
@@ -214,8 +214,8 @@ impl Api {
             .unwrap_or_else(|err| panic!("{}", err));
         let paths_holder = generic_segments.iter().map(|seg| (seg.ident.to_string(), Some(seg.arguments.clone()))).collect::<Vec<(_, _)>>();
         let request_type = Type::Path(TypePath {
-            qself: Some(Self::gen_qself(paths_holder.iter().map(|(path, generic)| (path.as_str(), generic.clone())).collect(), 4)),
-            path: Self::str_gen_path(vec![("dce_router", None), ("router", None), ("request", None), ("RequestTrait", None), ("Raw", None)])
+            qself: Some(Self::gen_qself(paths_holder.iter().map(|(path, generic)| (path.as_str(), generic.clone())).collect(), 3)),
+            path: Self::str_gen_path(vec![("dce_router", None), ("request", None), ("RequestTrait", None), ("Raw", None)])
         });
         let return_type = ReturnType::Type(parse_quote!(->), Box::new(Type::Reference(TypeReference{
             and_token: Default::default(),
@@ -224,7 +224,7 @@ impl Api {
             elem: Box::new(Type::Paren(TypeParen { paren_token: Default::default(), elem: Box::new(Type::TraitObject(TypeTraitObject {
                 dyn_token: Some(Default::default()), bounds: punctuated_create!(
                     TypeParamBound::Trait(TraitBound{paren_token: None, modifier: TraitBoundModifier::None, lifetimes: None, path: Self::str_gen_path(
-                        vec![("dce_router", None), ("router", None), ("api", None),
+                        vec![("dce_router", None), ("api", None),
                             ("ApiTrait", Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(punctuated_create!( GenericArgument::Type(request_type.clone()) ), None))))
                         ]),}),
                     TypeParamBound::Trait(TraitBound{paren_token: None, modifier: TraitBoundModifier::None, lifetimes: None, path: Self::str_gen_path(vec![("Send", None)]),}),
@@ -236,7 +236,7 @@ impl Api {
 
         (input, route_fn_name, return_type, quote!(
             let (method, extras) = #method_extras;
-            Box::leak(Box::new(dce_router::router::api::Api::new(
+            Box::leak(Box::new(dce_router::api::Api::new(
                 #controller,
                 #deserializers,
                 #serializers,

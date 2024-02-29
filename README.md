@@ -11,13 +11,14 @@ The DCE router package is located in `crates/router`, and examples of routable p
 ├──assets                               Resource directory
 │  ├──templates                         HTML and other template directory
 ├──crates                               Crate directory
+│  ├──macro                             DCE macro package
 │  ├──protocols                         Routable protocol implementation package directory
 │  │  ├──cli                            CLI routable protocol implementation
 │  │  ├──hyper                          Hyper HTTP routable protocol implementation
 │  │  ├──tokio                          Tokio TCP/UDP routable protocol implementation (this implementation is example code and not recommended for direct use in real projects)
 │  │  ├──tokio-tungstenite              Tokio Tungstenite WebSocket routable protocol implementation (this implementation is example code and not recommended for direct use in real projects)
 │  ├──router                            DCE router package
-│  │  ├──macro                          DCE router macro package
+│  ├──util                              DCE util package
 ├──src                                  DCE application example code
 │  ├──apis                              Route interface example code
 ```
@@ -44,9 +45,9 @@ Due to the very short process chain, as it directly calls the controller after m
 use rand::random;
 use serde::Serialize;
 use dce_cli::protocol::{CliProtocol, CliConvert, CliRaw};
-use dce_router::{api, openly_err};
-use dce_router::router::router::Router;
-use dce_router::router::serializer::JsonSerializer;
+use dce_macro::{api, openly_err};
+use dce_router::router::Router;
+use dce_router::serializer::JsonSerializer;
 
 #[tokio::main]
 async fn main() {

@@ -11,6 +11,8 @@ categories = ["network-programming"]
 edition = "2021"
 
 [dependencies]
+dce-util = { path = "../../util", version = "0.*" }
+dce-macro = { path = "../../macro", version = "0.*" }
 dce-router = { path = "../../router", version = "0.*" }
 async-trait = "0.1.73"
 log = "0.4.20"

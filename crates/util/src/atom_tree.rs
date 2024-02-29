@@ -3,8 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock, Weak};
-use dce_router_macro::closed_err;
-use crate::util::DceResult;
+use crate::mixed::{DceErr, DceResult};
 
 pub enum TreeTraverResult {
     StopAll,
@@ -48,8 +47,8 @@ where E: PartialEq + Debug,
     }
 
     fn actual_set_by_path(&self, mut path: Vec<K>, element: E, force: bool) -> DceResult<Arc<ATree<E, K>>> {
-        let key = path.pop().ok_or(closed_err!("Cannot get by an empty path"))?;
-        let parent = self.get_by_path(&path).ok_or(closed_err!("Parent not found"))?;
+        let key = path.pop().ok_or(DceErr::closed(0, "Cannot get by an empty path".to_owned()))?;
+        let parent = self.get_by_path(&path).ok_or(DceErr::closed(0, "Parent not found".to_owned()))?;
         Ok(if force { parent.set(key, element) } else { parent.set_if_absent(key, element) })
     }
 

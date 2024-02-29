@@ -1,16 +1,15 @@
 use std::any::type_name;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Debug;
-use dce_router::router::request::RawRequest;
-use dce_router_macro::openly_err;
-use crate::router::api::{ApiTrait, BeforeController};
-use crate::util::DceResult;
-use crate::util::string::merge_consecutive_char;
+use crate::request::RawRequest;
+use crate::api::{ApiTrait, BeforeController};
+use dce_util::mixed::{DceErr, DceResult};
+use dce_util::string::merge_consecutive_char;
+use dce_util::atom_tree::ATree;
+use dce_util::atom_tree::{KeyFactory, TreeTraverResult};
 use std::sync::Arc;
 use log::debug;
-use dce_router::util::atom_tree::ATree;
-use crate::router::request::{PathParam, RequestContext};
-use crate::util::atom_tree::{KeyFactory, TreeTraverResult};
+use crate::request::{PathParam, RequestContext};
 
 const PATH_PART_SEPARATOR: char = '/';
 const VARIABLE_OPENER: char = '{';
@@ -149,7 +148,7 @@ impl<Raw: RawRequest + Debug + 'static> Router<Raw> {
             if let Some((tmp_path, tmp_path_args)) = if self.api_mapping.contains_key(path) { None } else { self.match_var_path(path) } {
                 (path, path_args) = (tmp_path, tmp_path_args);
             }
-            ab = self.api_mapping.get(path).ok_or(openly_err!(CODE_NOT_FOUND, r#"path "{}" route failed, could not match in router"#, path))?;
+            ab = self.api_mapping.get(path).ok_or(DceErr::openly(CODE_NOT_FOUND, format!(r#"path "{}" route failed, could not match in router"#, path)))?;
             api = api_finder(ab)?;
             if api.redirect().is_empty() {
                 break;

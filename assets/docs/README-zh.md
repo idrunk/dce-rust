@@ -9,13 +9,14 @@ DCE路由器包位于`crates/router`，可路由协议的实现样例位于`crat
 ├─assets                                    资源目录
 │  ├─templates                              html等模板目录
 ├─crates                                    箱包目录
+│  ├─macro                                  DCE宏包
 │  ├─protocols                              可路由协议实现包目录
 │  │  ├─cli                                 cli可路由协议实现
 │  │  ├─hyper                               hyper http可路由协议实现
 │  │  ├─tokio                               tokio tcp/udp可路由协议实现（此实现为样例代码，不推荐直接在实际项目中应用）
 │  │  ├─tokio-tungstenite                   tokio tungstenite websocket可路由协议实现（此实现为样例代码，不推荐直接在实际项目中应用）
 │  ├─router                                 DCE路由器包
-│  │  ├─macro                               DCE路由器宏包
+│  ├─util                                   DCE工具包
 ├─src                                       DCE应用示例代码
 │  ├─apis                                   路由接口示例代码
 ```
@@ -44,9 +45,9 @@ DCE路由器包位于`crates/router`，可路由协议的实现样例位于`crat
 use rand::random;
 use serde::Serialize;
 use dce_cli::protocol::{CliProtocol, CliConvert, CliRaw};
-use dce_router::{api, openly_err};
-use dce_router::router::router::Router;
-use dce_router::router::serializer::JsonSerializer;
+use dce_macro::{api, openly_err};
+use dce_router::router::Router;
+use dce_router::serializer::JsonSerializer;
 
 #[tokio::main]
 async fn main() {

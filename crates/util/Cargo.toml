@@ -1,0 +1,15 @@
+[package]
+name = "dce-util"
+description = "Utils for dce framework."
+version = "0.1.0"
+authors = ["Drunk Tan <hi@idrunk.net>"]
+homepage = "https://drunkce.com"
+documentation = "https://docs.rs/dce-util"
+repository = "https://github.com/idrunk/dce-rust"
+keywords = ["dce", "util"]
+edition = "2021"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]

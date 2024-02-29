@@ -7,11 +7,11 @@ use futures_util::SinkExt;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
-use dce_router::router::protocol::{CustomizedProtocolRawRequest, RoutableProtocol};
-use dce_router::router::request::{RawRequest, Request, RequestContext};
-use dce_router::router::router::Router;
-use dce_router::router::serializer::Serialized;
-use dce_router::util::DceResult;
+use dce_router::protocol::{CustomizedProtocolRawRequest, RoutableProtocol};
+use dce_router::request::{RawRequest, Request, RequestContext};
+use dce_router::router::Router;
+use dce_router::serializer::Serialized;
+use dce_util::mixed::DceResult;
 
 
 pub type SemiWebsocketRaw = Request<CustomizedProtocolRawRequest<SemiWebsocketProtocol>, (), (), (), ()>;

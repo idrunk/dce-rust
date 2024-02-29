@@ -2,15 +2,14 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use crate::router::api::{Api, ApiTrait, Method};
-use crate::router::serializer::{Deserializer, Serializable, Serialized, Serializer};
-use crate::router::router::{CODE_NOT_FOUND, Router};
-use crate::util::DceResult;
+use crate::api::{Api, ApiTrait, Method};
+use crate::serializer::{Deserializer, Serializable, Serialized, Serializer};
+use crate::router::{CODE_NOT_FOUND, Router};
+use crate::protocol::RoutableProtocol;
+use dce_util::mixed::{DceErr, DceResult};
 use serde::Serialize;
-use dce_router_macro::{closed_err, openly_err};
 #[cfg(feature = "async")]
 use async_trait::async_trait;
-use dce_router::router::protocol::RoutableProtocol;
 
 
 #[derive(Debug)]
@@ -124,7 +123,7 @@ where Raw: RawRequest + Debug + 'static,
     }
 
     pub fn param(&self, key: &str) -> DceResult<&PathParam> {
-        self.context.path_params.get(key).ok_or(openly_err!("no param passed with name '{}'", key))
+        self.context.path_params.get(key).ok_or(DceErr::openly(0, format!("no param passed with name '{}'", key)))
     }
 
     pub fn context(&self) -> &HashMap<String, Box<dyn Any + Send>> {
@@ -257,7 +256,7 @@ pub trait RawRequest {
     }
 
     fn api_match<Raw: RawRequest>(raw: &Raw, apis: &[&'static (dyn ApiTrait<Raw> + Send + Sync)]) -> DceResult<&'static (dyn ApiTrait<Raw> + Send + Sync)> {
-        Ok(*apis.iter().find(|n| n.method_match(raw)).ok_or(closed_err!(CODE_NOT_FOUND, r#"Path "{}" cannot match any Api by Method"#, raw.path()))?)
+        Ok(*apis.iter().find(|n| n.method_match(raw)).ok_or(DceErr::closed(CODE_NOT_FOUND, format!(r#"Path "{}" cannot match any Api by Method"#, raw.path())))?)
     }
 
     // 协议开发者可在协议实现中实现此方法，并删掉已被解析的 prop_tuples 成员

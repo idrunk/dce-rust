@@ -13,7 +13,7 @@ impl DceError {
     pub fn gen_func(self, is_openly: bool) -> TokenStream {
         let DceError{code, formatter, args} = self;
         let openly = Ident::new(if is_openly {"Openly"} else {"Closed"}, Span::call_site());
-        parse_quote!(dce_router::util::DceErr::#openly(dce_router::util::DceError {
+        parse_quote!(dce_util::mixed::DceErr::#openly(dce_util::mixed::DceError {
             code: #code,
             message: format!(#formatter, #args),
         }))
