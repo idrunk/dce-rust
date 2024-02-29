@@ -1,0 +1,15 @@
+[package]
+name = "dce-router-macro"
+description = "The macros for the dce-router lib"
+version = "0.1.0"
+authors = ["Drunk Tan <hi@idrunk.net>"]
+edition = "2021"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.58"
+quote = "1.0.27"
+syn = {version = "2.0.16",features = ["full","fold"]}

@@ -1,0 +1,20 @@
+[package]
+name = "dce-cli"
+description = "A cli routable protocol implementation for dce-router"
+version = "0.1.0"
+authors = ["Drunk Tan <hi@idrunk.net>"]
+homepage = "https://drunkce.com"
+documentation = "https://docs.rs/dce-cli"
+repository = "https://github.com/idrunk/dce-rust"
+keywords = ["cli", "router"]
+categories = ["command-line-interface"]
+edition = "2021"
+
+[features]
+default = ["async"]
+async = ["dce-router/async", "async-trait"]
+
+[dependencies]
+async-trait = { version = "0.1.73", optional = true }
+dce-router = { path = "../../router", version = "0.*", default-features = false }
+log = "0.4.20"

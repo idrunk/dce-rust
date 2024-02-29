@@ -1,0 +1,55 @@
+use futures_util::StreamExt;
+use log::info;
+use tokio::net::TcpListener;
+use tokio_util::bytes::BytesMut;
+use tokio_util::codec::{BytesCodec, Decoder};
+use dce_cli::protocol::CliRaw;
+use dce_router::api;
+use dce_router::router::protocol::RoutableProtocol;
+use dce_router::router::router::Router;
+use dce_router::router::serializer::Serialized;
+use dce_tokio::protocol::{SemiTcpProtocol, SemiTcpRaw};
+
+/// `cargo run --package dce --bin app -- tcp start`
+#[api("tcp/start")]
+pub async fn tcp_start(req: CliRaw) {
+    let addr = "0.0.0.0:2048";
+    let server = TcpListener::bind(addr).await.unwrap();
+    let router = Router::new()
+        .push(hello)
+        .push(echo)
+        .ready();
+
+    info!("Dce started at {} with tokio-tcp", addr);
+
+    while let Ok((stream, _)) = server.accept().await {
+        tokio::spawn(async {
+            let framed = BytesCodec::new().framed(stream);
+            let (mut frame_writer, mut frame_reader) = framed.split::<BytesMut>();
+
+            while let Some(msg) = frame_reader.next().await {
+                match msg {
+                    Ok(str) => SemiTcpProtocol::from(str).route(router.clone(), &mut frame_writer, Default::default()).await,
+                    Err(err) => println!("Socket closed with error: {:?}", err),
+                };
+            }
+        });
+    }
+    req.end(None)
+}
+
+
+/// `cargo run --package dce --bin app -- tcp 127.0.0.1:2048 -- hello`
+#[api]
+pub async fn hello(req: SemiTcpRaw) {
+    req.pack_resp(Serialized::String("hello world".to_string()))
+}
+
+/// `cargo run --package dce --bin app -- tcp 127.0.0.1:2048 -- echo "echo me"`
+#[api("echo/{param?}")]
+pub async fn echo(mut req: SemiTcpRaw) {
+    let body = req.rpi_mut().body().await?;
+    let param = req.param("param")?.get().unwrap_or("");
+    let body = format!(r#"path param data: "{}"{}body data: "{}""#, param, "\n", body);
+    req.pack_resp(Serialized::String(body))
+}

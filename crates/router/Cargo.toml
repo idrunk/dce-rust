@@ -1,0 +1,27 @@
+[package]
+name = "dce-router"
+description = "A router for all type programming api route."
+version = "0.1.0"
+authors = ["Drunk Tan <hi@idrunk.net>"]
+readme = "../../README.md"
+homepage = "https://drunkce.com"
+documentation = "https://docs.rs/dce-router"
+repository = "https://github.com/idrunk/dce-rust"
+keywords = ["router", "dce", "api"]
+categories = ["command-line-interface", "config", "network-programming"]
+edition = "2021"
+
+[lib]
+crate-type = ["lib"]
+
+[features]
+default = ["async"]
+async = ["async-trait"]
+
+[dependencies]
+async-trait = { version = "0.1.77", optional = true }
+bytes = { version = "1.5.0", features = ["serde"] }
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+log = "0.4.20"
+dce-router-macro = { path = "macro" }

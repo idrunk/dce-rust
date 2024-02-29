@@ -1,0 +1,19 @@
+[package]
+name = "dce-tokio-tungstenite"
+description = "A websocket routable protocol implementation sample for dce-router"
+version = "0.1.0"
+authors = ["Drunk Tan <hi@idrunk.net>"]
+homepage = "https://drunkce.com"
+documentation = "https://docs.rs/dce-tokio-tungstenite"
+repository = "https://github.com/idrunk/dce-rust"
+keywords = ["websocket", "router"]
+categories = ["web-programming::websocket"]
+edition = "2021"
+
+[dependencies]
+dce-router = { path = "../../router", version = "0.*" }
+async-trait = "0.1.73"
+log = "0.4.20"
+futures-util = { version = "0.3.28", default-features = false, features = ["sink"] }
+tokio = { version = "1.36.0", default-features = false, features = ["io-util"] }
+tokio-tungstenite = "0.21.0"

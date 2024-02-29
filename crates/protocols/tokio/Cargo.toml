@@ -1,0 +1,20 @@
+[package]
+name = "dce-tokio"
+description = "A tcp/udp routable protocol implementation sample for dce-router"
+version = "0.1.0"
+authors = ["Drunk Tan <hi@idrunk.net>"]
+homepage = "https://drunkce.com"
+documentation = "https://docs.rs/dce-tokio"
+repository = "https://github.com/idrunk/dce-rust"
+keywords = ["tcp", "udp", "router"]
+categories = ["network-programming"]
+edition = "2021"
+
+[dependencies]
+dce-router = { path = "../../router", version = "0.*" }
+async-trait = "0.1.73"
+log = "0.4.20"
+futures-util = { version = "0.3.28", features = ["sink"] }
+tokio = { version = "1.36.0", features = ["full"] }
+tokio-util = { version = "0.7.0", features = ["full"] }
+bytes = "1.5.0"
