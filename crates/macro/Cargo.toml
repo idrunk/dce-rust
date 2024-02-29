@@ -8,6 +8,7 @@ documentation = "https://docs.rs/dce-macro"
 repository = "https://github.com/idrunk/dce-rust"
 keywords = ["dce", "macro"]
 categories = ["config"]
+license-file = "../../LICENSE"
 edition = "2021"
 
 [lib]

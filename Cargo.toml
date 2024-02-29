@@ -8,6 +8,7 @@ documentation = "https://docs.rs/dce"
 repository = "https://github.com/idrunk/dce-rust"
 keywords = ["dce", "router"]
 categories = ["command-line-utilities", "network-programming", "web-programming"]
+license-file = "LICENSE"
 edition = "2021"
 
 [[bin]]

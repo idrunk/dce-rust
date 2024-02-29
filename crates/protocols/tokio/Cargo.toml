@@ -8,6 +8,7 @@ documentation = "https://docs.rs/dce-tokio"
 repository = "https://github.com/idrunk/dce-rust"
 keywords = ["tcp", "udp", "router"]
 categories = ["network-programming"]
+license-file = "../../../LICENSE"
 edition = "2021"
 
 [dependencies]

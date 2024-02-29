@@ -7,6 +7,7 @@ homepage = "https://drunkce.com"
 documentation = "https://docs.rs/dce-util"
 repository = "https://github.com/idrunk/dce-rust"
 keywords = ["dce", "util"]
+license-file = "../../LICENSE"
 edition = "2021"
 
 [lib]

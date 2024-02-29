@@ -8,6 +8,7 @@ documentation = "https://docs.rs/dce-hyper"
 repository = "https://github.com/idrunk/dce-rust"
 keywords = ["http", "router"]
 categories = ["web-programming::http-server"]
+license-file = "../../../LICENSE"
 edition = "2021"
 
 [lib]
