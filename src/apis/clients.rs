@@ -27,7 +27,7 @@ pub fn append(router: Router<CustomizedProtocolRawRequest<CliProtocol>>) -> Rout
 }
 
 
-/// `cargo run --package dce --bin app --target-dir target/tcp-interactive -- tcp interactive 127.0.0.1:2048`
+/// `cargo run --bin app --target-dir target/tcp-interactive -- tcp interactive 127.0.0.1:2048`
 /// and then type in:
 /// `hello>BODY>>>`
 #[api("tcp/interactive/{address}")]
@@ -46,7 +46,7 @@ pub async fn tcp_interactive(req: CliRaw) {
     }
 }
 
-/// `cargo run --package dce --bin app --target-dir target/udp-interactive -- udp interactive 127.0.0.1:2049`
+/// `cargo run --bin app --target-dir target/udp-interactive -- udp interactive 127.0.0.1:2049`
 /// and then type in:
 /// `hello>BODY>>>`
 #[api("udp/interactive/{address}")]
@@ -80,7 +80,7 @@ pub async fn udp_interactive(req: CliRaw) {
     }
 }
 
-/// `cargo run --package dce --bin app --target-dir target/websocket-interactive -- websocket interactive 127.0.0.1:2047`
+/// `cargo run --bin app --target-dir target/websocket-interactive -- websocket interactive 127.0.0.1:2047`
 /// and then type in:
 /// `hello>BODY>>>`
 #[api("websocket/interactive/{address}")]
@@ -113,8 +113,8 @@ pub async fn websocket_interactive(req: CliRaw) {
 }
 
 
-/// `cargo run --package dce --bin app -- tcp 127.0.0.1:2048 -- hello`
-/// `cargo run --package dce --bin app -- tcp 127.0.0.1:2048 -- echo "echo me"`
+/// `cargo run --bin app -- tcp 127.0.0.1:2048 -- hello`
+/// `cargo run --bin app -- tcp 127.0.0.1:2048 -- echo "echo me"`
 #[api("tcp/{address}")]
 pub async fn tcp(req: CliRaw) {
     let addr = req.param("address")?.get().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
@@ -134,8 +134,8 @@ pub async fn tcp(req: CliRaw) {
     }
 }
 
-/// `cargo run --package dce --bin app -- udp 127.0.0.1:2049 -- hello`
-/// `cargo run --package dce --bin app -- udp 127.0.0.1:2049 -- echo "echo me"`
+/// `cargo run --bin app -- udp 127.0.0.1:2049 -- hello`
+/// `cargo run --bin app -- udp 127.0.0.1:2049 -- echo "echo me"`
 #[api("udp/{address}")]
 pub async fn udp(req: CliRaw) {
     let addr = req.param("address")?.get().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
@@ -156,8 +156,8 @@ pub async fn udp(req: CliRaw) {
     }
 }
 
-/// `cargo run --package dce --bin app -- websocket 127.0.0.1:2047 -- hello`
-/// `cargo run --package dce --bin app -- websocket 127.0.0.1:2047 -- echo "echo me"`
+/// `cargo run --bin app -- websocket 127.0.0.1:2047 -- hello`
+/// `cargo run --bin app -- websocket 127.0.0.1:2047 -- echo "echo me"`
 #[api("websocket/{address}")]
 pub async fn websocket(req: CliRaw) {
     let addr = req.param("address")?.get().unwrap();

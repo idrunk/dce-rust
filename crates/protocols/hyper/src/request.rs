@@ -52,7 +52,7 @@ impl<T: RoutableProtocol + HttpMethodGetter + Debug + Send + 'static> RawRequest
                 *method.downcast::<Vec<Method>>().unwrap()
             }
         } else {
-            vec![Method::GET]
+            vec![Method::GET, Method::HEAD, Method::OPTIONS]
         })))
     }
 }

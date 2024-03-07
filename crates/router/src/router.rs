@@ -1,17 +1,17 @@
 use std::any::type_name;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
 use crate::request::RawRequest;
 use crate::api::{ApiTrait, BeforeController};
 use dce_util::mixed::{DceErr, DceResult};
-use dce_util::string::merge_consecutive_char;
 use dce_util::atom_tree::ATree;
 use dce_util::atom_tree::{KeyFactory, TreeTraverResult};
-use std::sync::Arc;
+use std::sync::{Arc, RwLockReadGuard};
 use log::debug;
 use crate::request::{PathParam, RequestContext};
 
-const PATH_PART_SEPARATOR: char = '/';
+pub const PATH_PART_SEPARATOR: char = '/';
+pub const SUFFIX_BOUNDARY: char = '.';
 const VARIABLE_OPENER: char = '{';
 const VARIABLE_CLOSING: char = '}';
 const VAR_TYPE_OPTIONAL: char = '?';
@@ -22,9 +22,13 @@ pub const CODE_NOT_FOUND: isize = 404;
 
 #[derive(Debug)]
 pub struct Router<Raw: RawRequest + 'static> {
-    apis: Vec<(String, &'static (dyn ApiTrait<Raw> + Send + Sync))>,
-    omitted_paths: HashSet<String>,
-    api_mapping: HashMap<&'static str, Vec<&'static (dyn ApiTrait<Raw> + Send + Sync)>>,
+    path_part_separator: char,
+    suffix_boundary: char,
+    api_buffer: Vec<&'static (dyn ApiTrait<Raw> + Send + Sync)>,
+    raw_omitted_paths: HashSet<&'static str>,
+    id_api_mapping: HashMap<&'static str, &'static (dyn ApiTrait<Raw> + Send + Sync)>,
+    // HashMap's key was the omitted path with suffix
+    apis_mapping: HashMap<&'static str, Vec<&'static (dyn ApiTrait<Raw> + Send + Sync)>>,
     api_trunk_tree: Arc<ATree<ApiTrunk<Raw>, &'static str>>,
     before_controller: Option<BeforeController<Raw>>,
 }
@@ -32,34 +36,49 @@ pub struct Router<Raw: RawRequest + 'static> {
 impl<Raw: RawRequest + Debug + 'static> Router<Raw> {
     pub fn new() -> Self {
         Self {
-            apis: vec![],
-            omitted_paths: Default::default(),
-            api_mapping: Default::default(),
+            path_part_separator: PATH_PART_SEPARATOR,
+            suffix_boundary: SUFFIX_BOUNDARY,
+            api_buffer: vec![],
+            raw_omitted_paths: Default::default(),
+            id_api_mapping: Default::default(),
+            apis_mapping: Default::default(),
             api_trunk_tree: ATree::new(ApiTrunk::new("", vec![])),
             before_controller: None,
         }
     }
 
-    pub fn get_tree(&self) -> &Arc<ATree<ApiTrunk<Raw>, &'static str>> {
+    pub fn set_separator(mut self, path_part_separator: char , suffix_separator: char) -> Self {
+        self.path_part_separator = path_part_separator;
+        self.suffix_boundary = suffix_separator;
+        self
+    }
+
+    pub fn suffix_boundary(&self) -> char {
+        self.suffix_boundary
+    }
+
+    pub fn api_trunk_tree(&self) -> &Arc<ATree<ApiTrunk<Raw>, &'static str>> {
         &self.api_trunk_tree
     }
 
-    pub fn get_before_controller(&self) -> &Option<BeforeController<Raw>> {
+    pub fn before_controller(&self) -> &Option<BeforeController<Raw>> {
         &self.before_controller
     }
 
-    pub fn before_controller(mut self, before_controller: BeforeController<Raw>) -> Self {
+    pub fn set_before_controller(mut self, before_controller: BeforeController<Raw>) -> Self {
         self.before_controller = Some(before_controller);
         self
     }
 
     pub fn push(mut self, supplier: fn() -> &'static (dyn ApiTrait<Raw> + Send + Sync)) -> Self {
         let api = supplier();
-        let formatted = merge_consecutive_char(api.path().trim_matches(PATH_PART_SEPARATOR), PATH_PART_SEPARATOR); // merge format slashes
         if api.omission() {
-            self.omitted_paths.insert(formatted.clone());
+            self.raw_omitted_paths.insert(api.path());
         }
-        self.apis.push((formatted, api));
+        if ! api.id().is_empty() {
+            self.id_api_mapping.insert(api.id(), api);
+        }
+        self.api_buffer.push(api);
         self
     }
 
@@ -67,41 +86,62 @@ impl<Raw: RawRequest + Debug + 'static> Router<Raw> {
         consumer(self)
     }
 
-    fn omitted_path(&self, formatted: &String) -> String {
-        let parts = formatted.split(PATH_PART_SEPARATOR).collect::<Vec<_>>();
-        parts.iter().enumerate().filter(|(i, _)| !self.omitted_paths.contains(parts[0..=*i].join(PATH_PART_SEPARATOR.to_string().as_str()).as_str()))
-            .map(|t| t.1.to_string()).collect::<Vec<_>>().join(PATH_PART_SEPARATOR.to_string().as_str())
+    fn omitted_path(&self, path: &'static str) -> String {
+        let parts = path.split(PATH_PART_SEPARATOR).collect::<Vec<_>>();
+        parts.iter().enumerate()
+            // filtered out omitted part in path and join the other into a new one
+            .filter(|(i, _)| ! self.raw_omitted_paths.contains(parts[0..=*i].join(PATH_PART_SEPARATOR.to_string().as_str()).as_str()))
+            .map(|t| t.1.to_string())
+            .collect::<Vec<_>>()
+            .join(PATH_PART_SEPARATOR.to_string().as_str())
     }
 
     fn closing(&mut self) {
-        while let Some((path, api)) = self.apis.pop() {
-            let path = self.omitted_path(&path);
+        self.build_tree();
+        while let Some(api) = self.api_buffer.pop() {
+            let path = self.omitted_path(api.path());
             let mut apis = vec![api];
-            for index in (0..self.apis.len()).rev() {
-                if path.eq_ignore_ascii_case(self.omitted_path(&self.apis[index].0).as_str()) {
-                    apis.insert(0, self.apis.remove(index).1);
+            let mut suffixes = api.suffixes().clone();
+            for index in (0..self.api_buffer.len()).rev() {
+                if path.eq_ignore_ascii_case(self.omitted_path(&self.api_buffer[index].path()).as_str()) {
+                    // push to vec if omitted path are same
+                    let sibling_api = self.api_buffer.remove(index);
+                    suffixes.extend(sibling_api.suffixes().clone());
+                    apis.insert(0, sibling_api);
                 }
             }
-            let path = Box::leak(path.into_boxed_str());
-            self.api_mapping.insert(path, apis);
+            // Append suffix to path as api mapping key to grouping the apis
+            for suffix in suffixes {
+                let suffixed_path = self.suffix_path(&path, &*suffix);
+                self.apis_mapping.insert(Box::leak(suffixed_path.into_boxed_str()), apis.iter()
+                    .filter(|api| api.suffixes().contains(&suffix))
+                    .map(|api| *api)
+                    .collect::<Vec<_>>());
+            }
         }
-        self.build_tree();
+    }
+
+    fn suffix_path(&self, path: &String, suffix: &str) -> String {
+        format!("{}{}", path, if suffix.is_empty() { "".to_owned() } else { format!("{}{}", SUFFIX_BOUNDARY, suffix) })
     }
 
     fn build_tree(&mut self) {
-        // build NodeBox tree
+        let suffix_less_grouped_apis: Vec<Vec<_>> = self.api_buffer.iter().map(|a| a.path()).collect::<HashSet<_>>()
+            .iter().map(|path| self.api_buffer.iter().filter_map(|api| if api.path().eq(*path) { Some(*api) } else { None }).collect()).collect();
+        // 1. init the api_trunk_tree
         self.api_trunk_tree.build(
-            self.api_mapping.iter().map(|(path, apis)| ApiTrunk::new(path, apis.clone())).collect::<Vec<_>>(),
+            suffix_less_grouped_apis.iter().map(|apis| ApiTrunk::new(apis.first().unwrap().path(), apis.clone())).collect::<Vec<_>>(),
             // if there had some remains api
-            // fill parent NodeBoxes, for example only configured one api with path ["home/common/index"],
+            // fill parent ApiTrunks, for example only configured one api with path ["home/common/index"],
             // then it will be filled to ["home", "home/common", "home/common/index"]
-            Some(|tree, mut remains| {
+            Some(&|tree: &ATree<ApiTrunk<Raw>, &'static str>, mut remains: Vec<ApiTrunk<Raw>>| {
                 let mut fills: BTreeMap<Vec<&'static str>, ApiTrunk<Raw>> = BTreeMap::new();
                 while let Some(element) = remains.pop() {
                     let paths: Vec<_> = element.path.split(PATH_PART_SEPARATOR).collect();
                     for i in 0..paths.len() - 1 {
                         let path = paths[..=i].to_vec();
                         if matches!(tree.get_by_path(&path), None) && ! fills.contains_key(&path) {
+                            // the missed trunk must be bare, so the apis should be an empty vec
                             let api_path = ApiTrunk::new(Box::leak(path.clone().join(PATH_PART_SEPARATOR.to_string().as_str()).into_boxed_str()), vec![]);
                             fills.insert(path, api_path);
                         }
@@ -114,17 +154,29 @@ impl<Raw: RawRequest + Debug + 'static> Router<Raw> {
                 }
             }),
         );
+        // 2. fill the tree item properties
         self.api_trunk_tree.traversal(|tree| {
-            if let Some(parent) = tree.parent() {
-                let mut parent = parent.write().unwrap();
-                match parent.var_type {
-                    VarType::Required(_) => parent.is_mid_var = true,
-                    VarType::NotVar => {},
-                    _ => panic!("ambiguous type var '{}' cannot in middle.", parent.key()),
+            let is_var_elem = ! matches!(tree.read().unwrap().var_type, VarType::NotVar);
+            let mut current = tree.clone();
+            let mut is_omitted_passed_child = false;
+            while let Some(parent) = current.parent() {
+                if ! parent.read().unwrap().is_omission {
+                    let mut parent_writable = parent.write().unwrap();
+                    match parent_writable.var_type {
+                        VarType::Required(_) => parent_writable.is_mid_var = true,
+                        VarType::NotVar => {},
+                        _ => panic!("ambiguous type var '{}' cannot in middle.", parent_writable.key()),
+                    }
+                    // push to var_children if is a var whatever is it an omitted_passed_child or not
+                    if is_var_elem {
+                        parent_writable.var_children.push(tree.clone());
+                    } else if is_omitted_passed_child {
+                        parent_writable.omitted_passed_children.insert(tree.read().unwrap().key(), tree.clone());
+                    }
+                    break;
                 }
-                if ! matches!(tree.read().unwrap().var_type, VarType::NotVar) {
-                    parent.var_children.push(tree.clone());
-                }
+                is_omitted_passed_child = true;
+                current = parent;
             }
             TreeTraverResult::KeepOn
         });
@@ -139,68 +191,94 @@ impl<Raw: RawRequest + Debug + 'static> Router<Raw> {
         &self,
         mut path: &str,
         api_finder: impl Fn(&Vec<&'static (dyn ApiTrait<Raw> + Send + Sync)>) -> DceResult<&'static (dyn ApiTrait<Raw> + Send + Sync)>,
-    ) -> DceResult<(&'static (dyn ApiTrait<Raw> + Send + Sync), HashMap<&'static str, PathParam>)> {
+    ) -> DceResult<(&'static (dyn ApiTrait<Raw> + Send + Sync), HashMap<&'static str, PathParam>, Option<&'static str>)> {
+        let request_path = path;
         let mut api;
-        let mut ab;
         let mut path_args = Default::default();
+        let mut suffix = None;
         // match api follow redirect
         loop {
-            if let Some((tmp_path, tmp_path_args)) = if self.api_mapping.contains_key(path) { None } else { self.match_var_path(path) } {
-                (path, path_args) = (tmp_path, tmp_path_args);
+            let mut apis = self.apis_mapping.get(path);
+            if let Some((tmp_path, tmp_path_args, tmp_suffix)) = if apis.is_some() { None } else { self.match_var_path(path) } {
+                // when directly matched in api_mapping, means the suffix must be matched too, do not extract it here to maximize performance
+                // when var_path matched, means the suffix already matched and extracted, just pass to use
+                apis = self.apis_mapping.get(self.suffix_path(&self.omitted_path(tmp_path), tmp_suffix).as_str());
+                (path_args, suffix) = (tmp_path_args, Some(tmp_suffix));
             }
-            ab = self.api_mapping.get(path).ok_or(DceErr::openly(CODE_NOT_FOUND, format!(r#"path "{}" route failed, could not match in router"#, path)))?;
-            api = api_finder(ab)?;
+            api = api_finder(apis.ok_or_else(|| DceErr::openly(CODE_NOT_FOUND, format!(r#"path "{}" route failed, could not matched by Router"#, path)))?)?;
             if api.redirect().is_empty() {
                 break;
             }
             path = api.redirect();
         }
-        Ok((api, path_args))
+        debug!(r#"{}: path "{}" matched api "{}""#, type_name::<Raw>(), request_path, api.path());
+        Ok((api, path_args, suffix))
     }
 
     fn match_var_path(
         &self,
         path: &str,
-    ) -> Option<(&'static str, HashMap<&'static str, PathParam>)> {
-        let path_parts = path.split(PATH_PART_SEPARATOR).collect::<Vec<_>>();
+    ) -> Option<(&'static str, HashMap<&'static str, PathParam>, &'static str)> {
+        let path_parts = path.split(self.path_part_separator).collect::<Vec<_>>();
         let mut loop_items = vec![(self.api_trunk_tree.clone(), 0_usize)];
         let mut target_api_trunk = None;
+        let mut suffix = "";
         let mut path_args = HashMap::new();
         'outer: while let Some((api_trunk, part_number)) = loop_items.pop() {
-            let overflowed = part_number >= path_parts.len();
-            if overflowed && ! api_trunk.read().unwrap().apis.is_empty() {
+            let is_last_part = part_number == path_parts.len() - 1;
+            let is_overflowed = part_number >= path_parts.len();
+            if is_overflowed && ! api_trunk.read().unwrap().apis.is_empty() {
                 // should be finished at last request path part if not a bare tree
                 target_api_trunk = Some(api_trunk.clone());
                 break;
             }
-            let children = api_trunk.children().read().unwrap();
             // if not overflow and request path matched, then it must be a normal path
-            if let Some(sub_api_trunk) = if overflowed { None } else { children.get(&path_parts[part_number]) } {
+            if let Some((sub_api_trunk, matched_suffix)) = if is_overflowed { None } else {
+                self.find_consider_suffix(&path_parts[part_number], is_last_part, api_trunk.children().read().unwrap(), &api_trunk.read().unwrap().omitted_passed_children)
+            } {
                 // push it into loop queue to handle it next cycle
                 loop_items.push((sub_api_trunk.clone(), 1 + part_number));
+                suffix = matched_suffix;
             } else {
                 let insert_pos = loop_items.len();
                 for var_api_trunk in api_trunk.read().unwrap().var_children.clone() {
                     let var_api_trunk_read = var_api_trunk.read().unwrap();
                     if ! var_api_trunk_read.is_mid_var {
+                        // just need to check is_last_part because should already handle suffix if overflowed
+                        // pop out the last part to clean (cut off the suffix)
+                        let mut suffix_extractor = |path_parts: Vec<&str>, consumer: &mut dyn FnMut(Vec<&str>) -> Option<PathParam>| -> Option<PathParam> {
+                            let mut path_parts = path_parts.clone();
+                            if let Some(mut last_part) = path_parts.pop() {
+                                // try match suffix in the last part, cut off it and the remains is the pure path parameter
+                                // merge suffixes into a new BTreeSet to match in the order of complex suffix at the top
+                                if let Some(tmp_suffix) = var_api_trunk_read.apis.iter().flat_map(|api| api.suffixes()).collect::<BTreeSet<_>>()
+                                    .iter().find(|suf| last_part.ends_with(format!("{}{}", self.suffix_boundary, &****suf).as_str())) {
+                                    last_part = &last_part[0..last_part.len() - tmp_suffix.len() - 1];
+                                    suffix = &**tmp_suffix;
+                                }
+                                path_parts.push(last_part);
+                            }
+                            consumer(path_parts)
+                        };
                         // if not a middle var, then should finish var path match and collect vars and end the outer loop
                         match var_api_trunk_read.var_type {
                             // should be a none optional parameter if it's overflowed
-                            VarType::Optional(var_name) if overflowed => path_args.insert(var_name, PathParam::Opt(None)),
+                            VarType::Optional(var_name) if is_overflowed => path_args.insert(var_name, PathParam::Opt(None)),
                             // should be a some optional parameter if it's not overflowed
-                            VarType::Optional(var_name) if ! overflowed => path_args.insert(var_name, PathParam::Opt(Some(path_parts[part_number].to_string()))),
-                            VarType::EmptableVector(var_name) if overflowed => path_args.insert(var_name, PathParam::Vec(vec![])),
-                            VarType::EmptableVector(var_name) if ! overflowed => path_args.insert(var_name, PathParam::Vec(path_parts[part_number..].iter().map(|p| p.to_string()).collect::<Vec<_>>())),
+                            VarType::Optional(var_name) if is_last_part =>
+                                suffix_extractor(path_parts, &mut |pps| path_args.insert(var_name, PathParam::Opt(Some(pps[part_number].to_string())))),
+                            VarType::Required(var_name) if is_last_part =>
+                                suffix_extractor(path_parts, &mut |pps| path_args.insert(var_name, PathParam::Reqd(pps[part_number].to_string()))),
+                            VarType::EmptableVector(var_name) if is_overflowed => path_args.insert(var_name, PathParam::Vec(vec![])),
                             // shouldn't be a valid vector if it's overflowed
-                            VarType::Vector(var_name) if ! overflowed => path_args.insert(var_name, PathParam::Vec(path_parts[part_number..].iter().map(|p| p.to_string()).collect::<Vec<_>>())),
-                            VarType::Required(var_name) if ! overflowed => path_args.insert(var_name, PathParam::Reqd(path_parts[part_number].to_string())),
+                            VarType::EmptableVector(var_name) | VarType::Vector(var_name) if !is_overflowed =>
+                                suffix_extractor(path_parts, &mut |pps| path_args.insert(var_name, PathParam::Vec(pps[part_number..].iter().map(|p| p.to_string()).collect::<Vec<_>>()))),
                             // if it should be the end vars but overflowed, continue the for loop to let other var api path to match
                             _ => continue,
                         };
                         target_api_trunk = Some(var_api_trunk.clone());
                         break 'outer;
                     } else if let VarType::Required(var_name) = var_api_trunk_read.var_type {
-
                         // if it's middle var then insert to loop queue to handle it next cycle
                         path_args.insert(var_name, PathParam::Reqd(path_parts[part_number].to_string()));
                         loop_items.insert(insert_pos, (var_api_trunk.clone(), 1 + part_number));
@@ -208,29 +286,78 @@ impl<Raw: RawRequest + Debug + 'static> Router<Raw> {
                 }
             }
         }
-        target_api_trunk.map(|trunk| (trunk.read().unwrap().path, path_args))
+        target_api_trunk.map(|trunk| (trunk.read().unwrap().path, path_args, suffix))
+    }
+
+    fn find_consider_suffix(
+        &self,
+        part: &str,
+        is_last_part: bool,
+        children: RwLockReadGuard<BTreeMap<&'static str, Arc<ATree<ApiTrunk<Raw>, &'static str>>>>,
+        omitted_passed_children: &BTreeMap<&'static str, Arc<ATree<ApiTrunk<Raw>, &'static str>>>,
+    ) -> Option<(Arc<ATree<ApiTrunk<Raw>, &'static str>>, &'static str)> {
+        let matches = children.get(part).or_else(|| omitted_passed_children.get(part));
+        if matches.is_none() && is_last_part {
+            let mut boundary = part.len();
+            while let Some(previous) = part[0..boundary].rfind(self.suffix_boundary) {
+                // try to recursive match in children and omitted passed children, if matched then remains was the suffix
+                let matches = children.get(&part[0..previous]).or_else(|| omitted_passed_children.get(&part[0..previous]));
+                if matches.is_some() {
+                    return matches.into_iter().find_map(|tree| tree.read().unwrap().apis.iter()
+                        .flat_map(|api| api.suffixes())
+                        .find(|suffix| part[previous + 1 ..].eq(&***suffix))
+                        .map(|suffix| (tree.clone(), &**suffix)));
+                }
+                boundary = previous;
+            }
+        }
+        // whatever is middle part matched or directly tail matched, the suffix should be empty
+        return matches.map(|tree| (tree.clone(), ""));
     }
 
     #[cfg(feature = "async")]
-    pub async fn route(context: RequestContext<Raw>) -> (Option<bool>, DceResult<Option<Raw::Resp>>) {
-        match context.router().locate(context.raw().path(), |apis| Raw::api_match(context.raw(), apis)) {
-            Ok((api, path_args)) => {
-                debug!(r#"{}: path "{}" matched api "{}""#, type_name::<Raw>(), context.raw().path(), api.path());
-                (Some(api.unresponsive()), api.call_controller(context.set_api(api).set_params(path_args)).await)
-            },
+    async fn routed_handle(result: DceResult<(&'static (dyn ApiTrait<Raw> + Send + Sync), HashMap<&'static str, PathParam>, Option<&'static str>)>, context: RequestContext<Raw>) -> (Option<bool>, DceResult<Option<Raw::Resp>>) {
+        match result {
+            Ok((api, path_args, suffix)) => (Some(api.unresponsive()), api.call_controller(context.set_routed_info(api, path_args, suffix)).await),
             Err(err) => (None, Err(err)),
         }
     }
 
     #[cfg(not(feature = "async"))]
-    pub fn route(context: RequestContext<Raw>) -> (Option<bool>, DceResult<Option<Raw::Resp>>) {
-        match context.router().locate(context.raw().path(), |apis| Raw::api_match(context.raw(), apis)) {
-            Ok((api, path_args)) => {
-                debug!("{}: path '{}' matched api '{}'", type_name::<Raw>(), context.raw().path(), api.path());
-                (Some(api.unresponsive()), api.call_controller(context.set_api(api).set_params(path_args)))
-            },
+    fn routed_handle(result: DceResult<(&'static (dyn ApiTrait<Raw> + Send + Sync), HashMap<&'static str, PathParam>, Option<&'static str>)>, context: RequestContext<Raw>) -> (Option<bool>, DceResult<Option<Raw::Resp>>) {
+        match result {
+            Ok((api, path_args, suffix)) => (Some(api.unresponsive()), api.call_controller(context.set_routed_info(api, path_args, suffix))),
             Err(err) => (None, Err(err)),
         }
+    }
+
+    #[cfg(feature = "async")]
+    pub async fn route(context: RequestContext<Raw>) -> (Option<bool>, DceResult<Option<Raw::Resp>>) {
+        Self::routed_handle(context.router().locate(context.raw().path(), |apis| Raw::api_match(context.raw(), apis)), context).await
+    }
+
+    #[cfg(not(feature = "async"))]
+    pub fn route(context: RequestContext<Raw>) -> (Option<bool>, DceResult<Option<Raw::Resp>>) {
+        Self::routed_handle(context.router().locate(context.raw().path(), |apis| Raw::api_match(context.raw(), apis)), context)
+    }
+
+    fn id_locate(&self, id: &str) -> DceResult<(&'static (dyn ApiTrait<Raw> + Send + Sync), HashMap<&'static str, PathParam>, Option<&'static str>)> {
+        self.id_api_mapping.get(id).map_or_else(
+            || Err(DceErr::openly(CODE_NOT_FOUND, format!(r#"id "{}" route failed, could not matched by Router"#, id))),
+            |api| {
+                debug!(r#"{}: id "{}" matched api "{}""#, type_name::<Raw>(), id, api.path());
+                Ok((*api, Default::default(), None))
+            })
+    }
+
+    #[cfg(feature = "async")]
+    pub async fn id_route(context: RequestContext<Raw>) -> (Option<bool>, DceResult<Option<Raw::Resp>>) {
+        Self::routed_handle(context.router().id_locate(context.raw().path()), context).await
+    }
+
+    #[cfg(not(feature = "async"))]
+    pub fn id_route(context: RequestContext<Raw>) -> (Option<bool>, DceResult<Option<Raw::Resp>>) {
+        Self::routed_handle(context.router().id_locate(context.raw().path()), context)
     }
 }
 
@@ -248,8 +375,10 @@ pub struct ApiTrunk<Raw: RawRequest + 'static> {
     path: &'static str,
     var_type: VarType,
     is_mid_var: bool,
+    is_omission: bool,
     apis: Vec<&'static (dyn ApiTrait<Raw> + Send + Sync)>,
     var_children: Vec<Arc<ATree<ApiTrunk<Raw>, &'static str>>>,
+    omitted_passed_children: BTreeMap<&'static str, Arc<ATree<ApiTrunk<Raw>, &'static str>>>,
 }
 
 impl<Raw: RawRequest> ApiTrunk<Raw> {
@@ -258,14 +387,19 @@ impl<Raw: RawRequest> ApiTrunk<Raw> {
             path,
             var_type: VarType::NotVar,
             is_mid_var: false,
+            is_omission: apis.iter().any(|api| api.omission()),
             apis,
-            var_children: vec![],
+            var_children: Default::default(),
+            omitted_passed_children: Default::default(),
         }.fill_var_type()
     }
 
     fn fill_var_type(mut self) -> ApiTrunk<Raw> {
         let key = self.key();
         if key.starts_with(VARIABLE_OPENER) && key.ends_with(VARIABLE_CLOSING) {
+            if self.is_omission {
+                panic!("Var path could not be omissible.");
+            }
             let var = key[1..key.len() - 1].trim();
             self.var_type = match var.chars().last() {
                 Some(VAR_TYPE_OPTIONAL) => VarType::Optional(var[0..var.len() - 1].trim_end()),

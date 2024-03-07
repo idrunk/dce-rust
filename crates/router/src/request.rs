@@ -37,24 +37,20 @@ impl PathParam {
     }
 }
 
+
 #[derive(Debug)]
 pub struct RequestContext<Raw: RawRequest + 'static> {
     router: Arc<Router<Raw>>,
     api: Option<&'static (dyn ApiTrait<Raw> + Send + Sync)>,
     raw: Raw,
     path_params: HashMap<&'static str, PathParam>,
+    suffix: Option<&'static str>,
     data: HashMap<String, Box<dyn Any + Send>>,
 }
 
-impl<Raw: RawRequest + 'static> RequestContext<Raw> {
+impl<Raw: RawRequest + Debug + 'static> RequestContext<Raw> {
     pub fn new(router: Arc<Router<Raw>>, raw: Raw) -> RequestContext<Raw> {
-        RequestContext {
-            router,
-            api: None,
-            raw,
-            path_params: Default::default(),
-            data: Default::default(),
-        }
+        RequestContext { router, api: None, raw, path_params: Default::default(), suffix: None, data: Default::default(), }
     }
 
     pub fn router(&self) -> &Arc<Router<Raw>> {
@@ -73,13 +69,21 @@ impl<Raw: RawRequest + 'static> RequestContext<Raw> {
         &self.path_params
     }
 
-    pub fn set_api(mut self, api: &'static (dyn ApiTrait<Raw> + Send + Sync)) -> Self {
-        self.api = Some(api);
-        self
+    pub fn suffix(&mut self) -> &'static str {
+        match self.suffix {
+            Some(suffix) => suffix,
+            None => {
+                self.suffix = self.api.unwrap().suffixes().iter().map(|suffix| &**suffix)
+                    .find(|s| self.raw.path().ends_with(format!("{}{}", self.router.suffix_boundary(), s).as_str())).or_else(|| Some(""));
+                self.suffix()
+            },
+        }
     }
 
-    pub fn set_params(mut self, params: HashMap<&'static str, PathParam>) -> Self {
+    pub fn set_routed_info(mut self, api: &'static (dyn ApiTrait<Raw> + Send + Sync), params: HashMap<&'static str, PathParam>, suffix: Option<&'static str>) -> Self {
+        self.api = Some(api);
         self.path_params = params;
+        self.suffix = suffix;
         self
     }
 
@@ -118,6 +122,14 @@ where Raw: RawRequest + Debug + 'static,
         self.api
     }
 
+    pub fn context(&self) -> &RequestContext<Raw> {
+        &self.context
+    }
+
+    pub fn context_mut(&mut self) -> &mut RequestContext<Raw> {
+        &mut self.context
+    }
+
     pub fn params(&self) -> &HashMap<&'static str, PathParam> {
         &self.context.path_params
     }
@@ -126,7 +138,7 @@ where Raw: RawRequest + Debug + 'static,
         self.context.path_params.get(key).ok_or(DceErr::openly(0, format!("no param passed with name '{}'", key)))
     }
 
-    pub fn context(&self) -> &HashMap<String, Box<dyn Any + Send>> {
+    pub fn context_data(&self) -> &HashMap<String, Box<dyn Any + Send>> {
         &self.context.data
     }
 
@@ -144,21 +156,23 @@ where Raw: RawRequest + Debug + 'static,
 
     #[cfg(feature = "async")]
     pub async fn req(&mut self) -> DceResult<Req>  {
-        Self::parse(self.context.raw.data().await?, self.api.deserializers())
+        let body = self.context.raw.data().await?;
+        self.parse(body, self.api.deserializers())
     }
 
     #[cfg(not(feature = "async"))]
     pub fn req(&mut self) -> DceResult<Req> {
-        Self::parse(self.context.raw.data()?, self.api.deserializers())
+        let body = self.context.raw.data()?;
+        self.parse(body, self.api.deserializers())
     }
 
-    fn parse(serialized: Serialized, deserializers: &[Box<dyn Deserializer<ReqDto> + Send + Sync>]) -> DceResult<Req> {
-        Ok(Req::from(Raw::deserialize(deserializers, serialized)?))
+    fn parse(&self, serialized: Serialized, deserializers: &[Box<dyn Deserializer<ReqDto> + Send + Sync>]) -> DceResult<Req> {
+        Ok(Req::from(Raw::deserialize(deserializers, serialized, &self.context)?))
     }
 
     pub fn status(self, status: bool, data: Option<Resp>, message: Option<String>, code: isize) -> DceResult<Option<Raw::Resp>> {
-        let Self{context: RequestContext{raw, ..}, api} = self;
-        Ok(Some(raw.pack_responsible::<RespDto>(api.serializers(), Serializable::Status(ResponseStatus {
+        let Self{context, api} = self;
+        Ok(Some(Raw::pack_responsible::<RespDto>(context, api.serializers(), Serializable::Status(ResponseStatus {
             status,
             code,
             message: message.unwrap_or("".to_string()),
@@ -175,14 +189,14 @@ where Raw: RawRequest + Debug + 'static,
     }
 
     pub fn resp(self, resp: Resp) -> DceResult<Option<Raw::Resp>> {
-        let Self{context: RequestContext{raw, ..}, api} = self;
-        Ok(Some(raw.pack_responsible::<RespDto>(api.serializers(), Serializable::Dto(resp.into()))?.unwrap()))
+        let Self{context, api} = self;
+        Ok(Some(Raw::pack_responsible::<RespDto>(context, api.serializers(), Serializable::Dto(resp.into()))?.unwrap()))
     }
 
     pub fn end(self, resp: Option<Resp>) -> DceResult<Option<Raw::Resp>> {
         if let Some(resp) = resp {
-            let Self{context: RequestContext{raw, ..}, api} = self;
-            raw.pack_responsible::<RespDto>(api.serializers(), Serializable::Dto(resp.into()))
+            let Self{context , api} = self;
+            Raw::pack_responsible::<RespDto>(context, api.serializers(), Serializable::Dto(resp.into()))
         } else {
             Ok(None)
         }
@@ -234,7 +248,7 @@ pub struct ResponseStatus<Dto> {
 
 /// Package for raw request data and agent for protocol
 #[cfg_attr(feature = "async", async_trait)]
-pub trait RawRequest {
+pub trait RawRequest: Sized {
     type Rpi: RoutableProtocol + Debug;
     type Req: 'static;
     type Resp: Debug + 'static;
@@ -248,11 +262,15 @@ pub trait RawRequest {
     #[cfg(not(feature = "async"))]
     fn data(&mut self) -> DceResult<Serialized>;
 
-    fn pack_response(self, serialized: Serialized) -> DceResult<Self::Resp> where Self: Sized;
+    fn pack_response(self, serialized: Serialized) -> DceResult<Self::Resp>;
 
-    fn pack_responsible<RespDto: 'static>(self, serializers: &[Box<dyn Serializer<RespDto> + Send + Sync>], responsible: Serializable<RespDto>) -> DceResult<Option<Self::Resp>>
-    where Self: Sized {
-        Ok(Some(self.pack_response(Self::serialize(serializers, responsible)?)?))
+    fn pack_responsible<RespDto: 'static>(
+        context: RequestContext<Self>,
+        serializers: &[Box<dyn Serializer<RespDto> + Send + Sync>],
+        responsible: Serializable<RespDto>,
+    ) -> DceResult<Option<Self::Resp>> {
+        let body = Self::serialize(serializers, responsible, &context)?;
+        Ok(Some(Self::pack_response(context.raw, body)?))
     }
 
     fn api_match<Raw: RawRequest>(raw: &Raw, apis: &[&'static (dyn ApiTrait<Raw> + Send + Sync)]) -> DceResult<&'static (dyn ApiTrait<Raw> + Send + Sync)> {
@@ -274,19 +292,19 @@ pub trait RawRequest {
         Router::route(context)
     }
 
-    fn get_input_serializer<ReqDto>(deserializers: &[Box<dyn Deserializer<ReqDto> + Send + Sync>]) -> &Box<dyn Deserializer<ReqDto> + Send + Sync> {
+    fn get_input_serializer<'a, ReqDto>(deserializers: &'a [Box<dyn Deserializer<ReqDto> + Send + Sync>], _context: &RequestContext<Self>) -> &'a Box<dyn Deserializer<ReqDto> + Send + Sync> {
         deserializers.first().unwrap()
     }
 
-    fn get_output_serializer<RespDto>(serializers: &[Box<dyn Serializer<RespDto> + Send + Sync>]) -> &Box<dyn Serializer<RespDto> + Send + Sync> {
+    fn get_output_serializer<'a, RespDto>(serializers: &'a [Box<dyn Serializer<RespDto> + Send + Sync>], _context: &RequestContext<Self>) -> &'a Box<dyn Serializer<RespDto> + Send + Sync> {
         serializers.last().unwrap()
     }
 
-    fn deserialize<ReqDto>(serializers: &[Box<dyn Deserializer<ReqDto> + Send + Sync>], raw: Serialized) -> DceResult<ReqDto> {
-        Self::get_input_serializer(serializers).deserialize(raw)
+    fn deserialize<ReqDto>(serializers: &[Box<dyn Deserializer<ReqDto> + Send + Sync>], seq: Serialized, context: &RequestContext<Self>) -> DceResult<ReqDto> {
+        Self::get_input_serializer(serializers, context).deserialize(seq)
     }
 
-    fn serialize<RespDto>(serializers: &[Box<dyn Serializer<RespDto> + Send + Sync>], dto: Serializable<RespDto>) -> DceResult<Serialized> {
-        Self::get_output_serializer(serializers).serialize(dto)
+    fn serialize<RespDto>(serializers: &[Box<dyn Serializer<RespDto> + Send + Sync>], dto: Serializable<RespDto>, context: &RequestContext<Self>) -> DceResult<Serialized> {
+        Self::get_output_serializer(serializers, context).serialize(dto)
     }
 }

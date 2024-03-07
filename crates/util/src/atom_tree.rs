@@ -151,7 +151,7 @@ where E: PartialEq + Debug,
     pub fn build(
         &self,
         mut elements: Vec<E>,
-        remains_handler: Option<fn(&Self, Vec<E>)>,
+        remains_handler: Option<&dyn Fn(&Self, Vec<E>)>,
     )
         where E: KeyFactory<K>,
     {
@@ -252,7 +252,7 @@ mod tests {
             "hello/world/!",
             "hello/rust!",
             "hello/dce/for/rust!",
-        ], Some(|tree, mut remains| {
+        ], Some(&|tree: &ATree<&'static str, &'static str>, mut remains: Vec<&'static str>| {
             let mut fills: BTreeMap<Vec<&'static str>, &'static str> = BTreeMap::new();
             while let Some(element) = remains.pop() {
                 let paths: Vec<_> = element.split("/").collect();

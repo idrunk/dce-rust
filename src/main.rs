@@ -4,7 +4,7 @@ use env_logger::Builder;
 use log::LevelFilter;
 use dce_cli::protocol::CliProtocol;
 use dce_router::router::Router;
-use crate::apis::cli::{hello, session};
+use crate::apis::cli::{hello, index, session};
 use crate::apis::clients::append;
 use crate::apis::http::http_start;
 use crate::apis::tcp::tcp_start;
@@ -36,9 +36,9 @@ async fn main() {
         .init();
 
     let router = Router::new()
+        .push(index)
         .push(hello)
         .push(session)
-        .push(http_start)
         .push(http_start)
         .push(websocket_start)
         .push(tcp_start)

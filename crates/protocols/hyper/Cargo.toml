@@ -1,7 +1,7 @@
 [package]
 name = "dce-hyper"
 description = "A http routable protocol implementation for dce-router"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Drunk Tan <hi@idrunk.net>"]
 homepage = "https://drunkce.com"
 documentation = "https://docs.rs/dce-hyper"

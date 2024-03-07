@@ -1,4 +1,4 @@
-//! # Dce router helper macros
+//! # Dce macros
 //!
 //! ## api(): proc_macro_attribute
 //! An attribute-like macro, you can use it to define api, it will auto bind the controller func.
@@ -14,6 +14,8 @@
 //! fruit/{target?} | fruit<br>fruit/apple | vegetable | optional param, it must be end of the path
 //! fruit/{targets*} | fruit<br>fruit/apple/banana | vegetable | optional vec param, it must be end of the path
 //! fruit/{targets+} | fruit/apple<br>fruit/apple/banana | fruit<br>vegetable | required vec param, it must be end of the path
+//! fruit/{targets+}.\|html | fruit/apple<br>fruit/apple.html | fruit/apple.json | support non suffix or the ".html" suffix but not others
+//! fruit/{targets+}.html\|json | fruit/apple.html<br>fruit/apple/banana.json | fruit/apple | support the ".html" or ".json" suffixes but not non or others
 //!
 //!- *serializer `Vec/struct`*:\
 //! Response body data serializer, use to serialize the `DTO` into `sequences`, like `JsonSerializer{}`. It will be `UnreachableSerializer{}` if not defined.

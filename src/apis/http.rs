@@ -20,12 +20,12 @@ use dce_hyper::serializer::SailfishSerializer;
 use dce_macro::{api, openly_err};
 
 
-/// `RUST_LOG=debug cargo run --package dce --bin app --target-dir target/http -- http start`
+/// `RUST_LOG=debug cargo run --bin app --target-dir target/http -- http start`
 #[api("http/start")]
 async fn http_start(_: CliRaw) {
     let addr = SocketAddr::from(([127, 0, 0, 1], 2046));
     let router = Router::new()
-        .before_controller(BeforeController::Async(Box::new(|context|
+        .set_before_controller(BeforeController::Async(Box::new(|context|
             Box::pin((|mut context: RequestContext<HttpRawRequest<HyperHttpProtocol>>| async {
                 if context.api()?.path() == "session/{username?}" {
                     if matches!(context.params().get("username"), Some(PathParam::Opt(Some(_)))) {
@@ -117,10 +117,10 @@ pub fn var6(req: HttpRaw) {
 #[api("session/{username?}", serializer = JsonSerializer{})]
 pub fn session(req: HttpRaw) {
     if matches!(req.params().get("username"), Some(PathParam::Opt(Some(username))) if username == "dce") {
-        println!("{:#?}", *req.context().get("hello").unwrap().downcast_ref::<&str>().unwrap());
+        println!("{:#?}", *req.context_data().get("hello").unwrap().downcast_ref::<&str>().unwrap());
         req.success(None)
     } else {
-        println!("{:#?}", req.context());
+        println!("{:#?}", req.context_data());
         req.fail(Some("invalid session".to_string()), 403)
     }
 }
@@ -128,7 +128,7 @@ pub fn session(req: HttpRaw) {
 /// `curl http://127.0.0.1:2046/hello`
 #[api(method = Get, serializer = JsonSerializer{})]
 pub async fn hello(req: HttpRaw) -> DceResult<Option<HttpResp>> {
-    println!("{:#?}", req.context());
+    println!("{:#?}", req.context_data());
     req.success(None)
 }
 

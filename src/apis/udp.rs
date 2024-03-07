@@ -10,7 +10,7 @@ use dce_router::router::Router;
 use dce_router::serializer::Serialized;
 use dce_tokio::protocol::{SemiTcpProtocol, SemiTcpRaw};
 
-/// `cargo run --package dce --bin app -- udp start`
+/// `cargo run --bin app -- udp start`
 #[api("udp/start")]
 pub async fn udp_start(req: CliRaw) {
     let addr = "0.0.0.0:2049";
@@ -34,13 +34,13 @@ pub async fn udp_start(req: CliRaw) {
 }
 
 
-/// `cargo run --package dce --bin app -- udp 127.0.0.1:2049 -- hello`
+/// `cargo run --bin app -- udp 127.0.0.1:2049 -- hello`
 #[api]
 pub async fn hello(req: SemiTcpRaw) {
     req.pack_resp(Serialized::String("hello world".to_string()))
 }
 
-/// `cargo run --package dce --bin app -- udp 127.0.0.1:2049 -- echo "echo me"`
+/// `cargo run --bin app -- udp 127.0.0.1:2049 -- echo "echo me"`
 #[api("echo/{param?}")]
 pub async fn echo(mut req: SemiTcpRaw) {
     let body = req.rpi_mut().body().await?;

@@ -10,7 +10,7 @@ use dce_router::serializer::Serialized;
 use dce_tokio_tungstenite::protocol::{SemiWebsocketProtocol, SemiWebsocketRaw};
 
 
-/// `cargo run --package dce --bin app -- websocket start`
+/// `cargo run --bin app -- websocket start`
 #[api("websocket/start")]
 pub async fn websocket_start(req: CliRaw) {
     let addr = "0.0.0.0:2047";
@@ -42,13 +42,13 @@ pub async fn websocket_start(req: CliRaw) {
 }
 
 
-/// `cargo run --package dce --bin app -- websocket 127.0.0.1:2047 -- hello`
+/// `cargo run --bin app -- websocket 127.0.0.1:2047 -- hello`
 #[api]
 pub async fn hello(req: SemiWebsocketRaw) {
     req.pack_resp(Serialized::String("hello world".to_string()))
 }
 
-/// `cargo run --package dce --bin app -- websocket 127.0.0.1:2047 -- echo "echo me"`
+/// `cargo run --bin app -- websocket 127.0.0.1:2047 -- echo "echo me"`
 #[api("echo/{param?}")]
 pub async fn echo(mut req: SemiWebsocketRaw) {
     let body = req.rpi_mut().body().await?;

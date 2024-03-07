@@ -53,6 +53,7 @@ use dce_router::serializer::JsonSerializer;
 async fn main() {
     let router = Router::new()
         .push(hello)
+        .push(session)
         .ready();
 
     CliProtocol::new(1).route(router.clone(), Default::default()).await;
