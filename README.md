@@ -2,7 +2,7 @@
 
 Almost all applications provide interactive interfaces. Due to different protocols, there is no unified routing rule for different types of interfaces, which may lead to a chaotic program structure and make it difficult to control various interfaces in a unified and convenient way. To address this issue, DCE provides a standard router and encapsulates the characteristics of routable protocols. For interfaces without standard URI paths, as long as they implement the routable protocol trait, they can be uniformly routed through the DCE router.
 
-> *DCE was originally a PHP-written network programming framework that integrated a router, HTTP/TCP servers, and some other features. Due to a fascination with RUST, the author moved it over. Currently, only the distinctive router has been moved, and in the future, the session manager will also be moved, while most other features will not.*
+DCE-RUST not only encapsulates the main router but also includes a session manager. Together with the router, it enables smooth permission control. Besides basic session storage interfaces, the session manager implements user sessions, long connection sessions, and self-regenerating session managers, facilitating the management of user-level sessions. For more detailed documentation, click [here](crates/session/README.md).
 
 The DCE router package is located in `crates/router`, and examples of routable protocol implementations are located in `crates/protocols`. The application example code for the DCE router is under the `src` directory. The directory structure is explained as follows:
 
@@ -18,6 +18,7 @@ The DCE router package is located in `crates/router`, and examples of routable p
 │  │  ├──tokio                          Tokio TCP/UDP routable protocol implementation (this implementation is example code and not recommended for direct use in real projects)
 │  │  ├──tokio-tungstenite              Tokio Tungstenite WebSocket routable protocol implementation (this implementation is example code and not recommended for direct use in real projects)
 │  ├──router                            DCE router package
+│  ├──session                           DCE session management package
 │  ├──util                              DCE util package
 ├──src                                  DCE application example code
 │  ├──apis                              Route interface example code
@@ -25,9 +26,9 @@ The DCE router package is located in `crates/router`, and examples of routable p
 
 Regarding routable protocol trait, since HTTP and CLI have standard path addresses for routing, these implementations are generally applicable to real projects. For other implementations such as TCP routable protocol, they are currently mainly used as example code because communication protocols like TCP usually define a new business protocol on top, and they do not have a unified standard. Therefore, users need to implement the corresponding routable protocol to adapt to the DCE router.
 
-**In addition to basic routing functionality, the DCE router also provides a global controller pre-event interface, and the Request object provides data conversion and serialization utility interfaces:**
+**In addition to basic routing functionality, the DCE router also provides a global controller pre-event/post-event interface, and the Request object provides data conversion and serialization utility interfaces:**
 - The global controller pre-event interface can perform some pre-processing work, such as global permission control, which is very convenient to do here.
-- Data converter, used for conversion between `DTO` and `ENTITY`. By implementing the `From/Into` traits, operations such as desensitization can be performed on entity data, converting it into a data structure suitable for transmission.
+- Data converter, used for conversion between `DTO` and `ENTITY`. By self implementing the `From/Into` traits, operations such as desensitization can be performed on entity data, converting it into a data structure suitable for transmission.
 - Serialization interface used to encode `DTO` for transmission or parse `sequences` into `DTO` for conversion into entity objects. The specific serialization tool is configured through the `api` macro.
 
 #### Routing Performance:
@@ -44,17 +45,17 @@ Due to the very short process chain, as it directly calls the controller after m
 ```rust
 use rand::random;
 use serde::Serialize;
-use dce_cli::protocol::{CliProtocol, CliConvert, CliRaw};
+use dce_cli::protocol::{CliProtocol, Cli, CliGet};
 use dce_macro::{api, openly_err};
 use dce_router::router::Router;
 use dce_router::serializer::JsonSerializer;
 
 #[tokio::main]
 async fn main() {
-    let router = Router::new()
+    let router = Router::new().unwrap()
         .push(hello)
         .push(session)
-        .ready();
+        .ready().unwrap();
 
     CliProtocol::new(1).route(router.clone(), Default::default()).await;
 }
@@ -62,16 +63,16 @@ async fn main() {
 /// `cargo run --package dce --bin app -- hello`
 /// `cargo run --package dce --bin app -- hello DCE`
 #[api("hello/{target?}")]
-pub async fn hello(req: CliRaw) {
+pub async fn hello(req: Cli) {
     let target = req.param("target")?.get().unwrap_or("RUST").to_owned();
     req.raw_resp(format!("Hello {} !", target))
 }
 
-/// `cargo run --package dce --bin app -- session`
-/// `cargo run --package dce --bin app -- session --user DCE`
+/// `cargo run --package dce --bin app -- manager`
+/// `cargo run --package dce --bin app -- manager --user DCE`
 #[api(serializer = JsonSerializer{})]
-pub async fn session(mut req: CliConvert<User, UserDto>) {
-    let name = req.rpi_mut().args_mut().remove("--user").ok_or_else(|| openly_err!(r#"please pass in the "--user" arg"#))?;
+pub async fn session(mut req: CliGet<UserDto>) {
+    let name = req.rp_mut().args_mut().remove("--user").ok_or_else(|| openly_err!(r#"please pass in the "--user" arg"#))?;
     let resp = User {
         nickname: name.clone(),
         gender: if random::<u8>() > 127 { Gender::Female } else { Gender::Male },

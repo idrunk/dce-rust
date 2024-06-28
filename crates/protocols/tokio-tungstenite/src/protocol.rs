@@ -1,24 +1,24 @@
 use std::any::Any;
 use std::collections::HashMap;
-use std::ops::Deref;
+use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::SinkExt;
+use log::error;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
-use dce_router::protocol::{CustomizedProtocolRawRequest, RoutableProtocol};
-use dce_router::request::{RawRequest, Request, RequestContext};
+use dce_router::protocol::{HEAD_ID_NAME, HEAD_PATH_NAME, Meta, RoutableProtocol};
+use dce_router::request::{Request, Response};
 use dce_router::router::Router;
 use dce_router::serializer::Serialized;
-use dce_util::mixed::DceResult;
+use dce_util::mixed::{DceErr, DceResult};
 
-
-pub type SemiWebsocketRaw = Request<CustomizedProtocolRawRequest<SemiWebsocketProtocol>, (), (), (), ()>;
-pub type SemiWebsocketGet<Dto> = Request<CustomizedProtocolRawRequest<SemiWebsocketProtocol>, (), (), Dto, Dto>;
-pub type SemiWebsocketSame<Dto> = Request<CustomizedProtocolRawRequest<SemiWebsocketProtocol>, Dto, Dto, Dto, Dto>;
-pub type SemiWebsocketNoConvert<Req, Resp> = Request<CustomizedProtocolRawRequest<SemiWebsocketProtocol>, Req, Req, Resp, Resp>;
-pub type SemiWebsocket<ReqDto, Req, Resp, RespDto> = Request<CustomizedProtocolRawRequest<SemiWebsocketProtocol>, ReqDto, Req, Resp, RespDto>;
+pub type SemiWebsocketRaw<'a> = Request<'a, SemiWebsocketProtocol, (), ()>;
+pub type SemiWebsocketGet<'a, Dto> = Request<'a, SemiWebsocketProtocol, (), Dto>;
+pub type SemiWebsocketSame<'a, Dto> = Request<'a, SemiWebsocketProtocol, Dto, Dto>;
+pub type SemiWebsocket<'a, ReqDto, RespDto> = Request<'a, SemiWebsocketProtocol, ReqDto, RespDto>;
 
 
 const ID_PATH_SEPARATOR: char = ';';
@@ -27,9 +27,8 @@ const HEAD_BODY_SEPARATOR: &str = ">BODY>>>";
 
 #[derive(Debug)]
 pub struct SemiWebsocketProtocol {
-    id: Option<String>,
-    path: Option<String>,
-    body: Option<Serialized>,
+    meta: Meta<Message, Message>,
+    body_index: usize,
     binary_response: bool,
 }
 
@@ -41,79 +40,97 @@ impl SemiWebsocketProtocol {
 
     pub async fn route(
         self,
-        router: Arc<Router<CustomizedProtocolRawRequest<Self>>>,
+        router: Arc<Router<Self>>,
         ws_stream: &mut WebSocketStream<TcpStream>,
         context_data: HashMap<String, Box<dyn Any + Send>>,
     ) {
-        let resp = Self {
-            id: self.id.clone(),
-            path: self.path.clone(),
-            body: None,
-            binary_response: self.binary_response.clone(),
-        };
-        if let Some(handled) = resp.handle_result(CustomizedProtocolRawRequest::route(
-            RequestContext::new(router, CustomizedProtocolRawRequest::new(self)).set_data(context_data)
-        ).await) {
-            ws_stream.send(handled).await.unwrap();
+        if let Some(handled) = Self::handle(self, router, context_data).await {
+            let _ = ws_stream.send(handled).await.map_err(|e| error!("{e}"));
         }
     }
 }
 
 impl From<Message> for SemiWebsocketProtocol {
     fn from(value: Message) -> Self {
-        assert!(value.is_binary() || value.is_text(), "can only convert a text message frame");
-        let mut head = "";
-        let mut body = value.to_text().unwrap().trim();
-        if let Some((tmp_head, tmp_body)) = body.split_once(HEAD_BODY_SEPARATOR) {
-            head = tmp_head.trim_end();
-            body = tmp_body.trim_start();
+        let mut body_index = 0;
+        let mut heads = HashMap::new();
+        let mut path = value.to_text().map_or("", &str::trim).to_string();
+        if let Some(index) = path.find(HEAD_BODY_SEPARATOR) {
+            let mut head_lines: Vec<_> = path[0..index].lines().map(ToString::to_string).collect();
+            path = head_lines.remove(0);
+            if let Some((tmp_id, tmp_path)) = path.split_once(ID_PATH_SEPARATOR) {
+                heads.insert(HEAD_ID_NAME.to_string(), tmp_id.to_string());
+                path = tmp_path.to_string();
+            }
+            heads.extend(head_lines.iter().map(|line| line.split_once(':')
+                .map_or_else(|| (line.to_string(), "".to_string()), |(k, v)| (k.to_string(), v.to_string()))));
+            body_index = index + HEAD_BODY_SEPARATOR.len();
         }
-        let mut req_id = "";
-        let mut path = head.lines().nth(0).unwrap_or("");
-        if let Some((tmp_reqid, tmp_path)) = path.split_once(ID_PATH_SEPARATOR) {
-            req_id = tmp_reqid.trim_end();
-            path = tmp_path.trim_start();
-        }
-        Self {
-            id: if req_id.is_empty() { None } else { Some(req_id.to_string()) },
-            path: if path.is_empty() { None } else { Some(path.to_string()) },
-            body: if body.is_empty() { None } else { Some(Serialized::String(body.to_string())) },
-            binary_response: false,
-        }
+        heads.insert(HEAD_PATH_NAME.to_string(), path);
+        Self { meta: Meta::new(value, heads), body_index, binary_response: false, }
     }
 }
 
 impl Into<Message> for SemiWebsocketProtocol {
-    fn into(self) -> Message {
-        let SemiWebsocketProtocol{id, path, body, binary_response} = self;
-        let body = body.unwrap_or_else(|| Serialized::String("".to_string()));
-        if binary_response {
-            let mut binary = vec![];
-            if let Some(mut id) = id {
-                unsafe { binary.append(id.as_mut_vec()); }
-                binary.push(ID_PATH_SEPARATOR as u8);
+    fn into(mut self) -> Message {
+        let resp = self.resp_mut().take();
+        let (id, path) = (self.id(), self.path());
+        match resp {
+            Some(Response::Raw(resp)) => resp,
+            resp => {
+                if self.binary_response {
+                    let mut binary = vec![];
+                    if let Some(id) = id {
+                        binary.extend(id.as_bytes());
+                        binary.push(ID_PATH_SEPARATOR as u8);
+                    }
+                    binary.extend(path.as_bytes());
+                    for (k, v) in self.resp_heads() {
+                        binary.extend(format!("\n{k}:{v}").as_bytes());
+                    }
+                    binary.extend(format!("\n{}\n", HEAD_BODY_SEPARATOR).as_bytes());
+                    if let Some(Response::Serialized(sd)) = resp {
+                        binary.extend(match sd {
+                            Serialized::Bytes(bts) => bts.to_vec(),
+                            Serialized::String(str) => str.into_bytes(),
+                        });
+                    }
+                    Message::Binary(binary)
+                } else {
+                    let mut text = "".to_string();
+                    if let Some(id) = id {
+                        text.push_str(id);
+                        text.push(ID_PATH_SEPARATOR);
+                    }
+                    text.push_str(path);
+                    for (k, v) in self.resp_heads() {
+                        text.push_str(format!("\n{k}:{v}").as_str());
+                    }
+                    text.push_str(format!("\n{}\n", HEAD_BODY_SEPARATOR).as_str());
+                    if let Some(Response::Serialized(sd)) = resp {
+                        text.push_str(match sd {
+                            Serialized::Bytes(bts) => String::from_utf8_lossy(bts.deref()).to_string(),
+                            Serialized::String(str) => str,
+                        }.as_str());
+                    }
+                    Message::Text(text)
+                }
             }
-            if let Some(mut path) = path { unsafe { binary.append(path.as_mut_vec()) } }
-            binary.append(unsafe { format!("\n{}\n", HEAD_BODY_SEPARATOR).as_mut_vec() });
-            binary.append(&mut match body {
-                Serialized::Bytes(bts) => bts.to_vec(),
-                Serialized::String(str) => str.into_bytes(),
-            });
-            Message::Binary(binary)
-        } else {
-            let mut text = "".to_string();
-            if let Some(id) = id {
-                text.push_str(id.as_str());
-                text.push(ID_PATH_SEPARATOR);
-            }
-            if let Some(path) = path { text.push_str(path.as_str()) }
-            text.push_str(format!("\n{}\n", HEAD_BODY_SEPARATOR).as_str());
-            text.push_str(match body {
-                Serialized::Bytes(bts) => String::from_utf8_lossy(bts.deref()).to_string(),
-                Serialized::String(str) => str,
-            }.as_str());
-            Message::Text(text)
         }
+    }
+}
+
+impl Deref for SemiWebsocketProtocol {
+    type Target = Meta<Message, Message>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.meta
+    }
+}
+
+impl DerefMut for SemiWebsocketProtocol {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.meta
     }
 }
 
@@ -122,25 +139,15 @@ impl RoutableProtocol for SemiWebsocketProtocol {
     type Req = Message;
     type Resp = Self::Req;
 
-    fn path(&self) -> &str {
-        match &self.path {
-            Some(path) => path,
-            None => "",
-        }
-    }
-
     async fn body(&mut self) -> DceResult<Serialized> {
-        assert!(matches!(self.body, Some(_)), "body can only take once");
-        let Some(body) = self.body.take() else { unreachable!() };
-        Ok(body)
+        self.req_mut().take().ok_or_else(|| DceErr::closed0("Empty request"))?.to_text()
+            .map(|t| Serialized::String(t[self.body_index ..].to_string())).map_err(DceErr::closed0)
     }
 
-    fn pack_resp(mut self, serialized: Serialized) -> Self::Resp {
-        self.body = Some(serialized);
-        self.into()
-    }
-
-    fn id(&self) -> Option<&str> {
-        self.id.as_ref().map_or(None, |id| Some(id))
+    fn pack_resp(&self, serialized: Serialized) -> Self::Resp {
+        Message::Text(match serialized {
+            Serialized::Bytes(bts) => String::from_utf8_lossy(bts.deref()).to_string(),
+            Serialized::String(str) => str,
+        })
     }
 }

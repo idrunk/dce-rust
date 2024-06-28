@@ -24,10 +24,14 @@
 //! }
 //!
 //! #[api]
-//! pub fn sync(req: CliRaw) {}
+//! pub fn sync(req: CliRaw) {
+//!     req.end(None)
+//! }
 //!
 //! #[api]
-//! pub async fn a_sync(req: CliRaw) {}
+//! pub async fn a_sync(req: CliRaw) {
+//!     req.raw_resp("Hello world !".to_string())
+//! }
 //! ```
 //!
 

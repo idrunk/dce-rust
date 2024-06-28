@@ -1,11 +1,21 @@
-use dce_cli::protocol::{CliRaw, CliProtocol};
+use dce_cli::protocol::{CliRaw, CliProtocol, CliGet};
 use dce_macro::api;
 use dce_router::router::Router;
+#[cfg(feature = "sync-session")]
+use dce_router::api::EventHandler;
+#[cfg(feature = "sync-session")]
+use crate::apis::session_sync::{before_controller, login, profile};
+
+mod apis {
+    #[cfg(feature = "sync-session")]
+    pub mod session_sync;
+}
 
 fn main() {
     env_logger::init();
 
-    let router = Router::new()
+    #[allow(unused_mut)]
+    let mut router = Router::new().unwrap()
         .push(index)
         .push(suffix)
         .push(var_suffix)
@@ -13,15 +23,21 @@ fn main() {
         .push(un_omission)
         .push(un_omission2)
         .push(un_omission3)
-        .ready();
+        .push(un_omission3);
 
+    #[cfg(feature = "sync-session")]
+    { router = router.set_event_handlers(Some(EventHandler::Sync(before_controller)), None)
+        .push(login)
+        .push(profile); }
+
+    let router = router.ready().unwrap();
     CliProtocol::new(1).route(router.clone(), Default::default());
 }
 
 /// `cargo run --bin cli --no-default-features -- target=world --arg2 haha`
 #[api("")]
 pub fn index(req: CliRaw) {
-    let raw = format!("{:#?}", req.raw());
+    let raw = format!("{:#?}", req.rp());
     req.raw_resp(raw)
 }
 
@@ -29,8 +45,8 @@ pub fn index(req: CliRaw) {
 /// `cargo run --bin cli --no-default-features -- suffix.txt`                   route matched
 /// `cargo run --bin cli --no-default-features -- suffix.txt.1`                 route matched
 #[api("suffix.txt|txt.1")]
-pub fn suffix(mut req: CliRaw) {
-    let raw = format!("{:#?}\n{:#?}", req.context_mut().suffix(), req);
+pub fn suffix(mut req: CliGet<String>) {
+    let raw = format!("{:#?}\n{:#?}", req.suffix(), req);
     req.raw_resp(raw)
 }
 
@@ -40,7 +56,7 @@ pub fn suffix(mut req: CliRaw) {
 /// `cargo run --bin cli --no-default-features -- suffix part name.txt`         route matched
 #[api("suffix/{filename+}.txt|")]
 pub fn var_suffix(mut req: CliRaw) {
-    let raw = format!("{:#?}\n{:#?}", req.context_mut().suffix(), req.params());
+    let raw = format!("{:#?}\n{:#?}", req.suffix(), req.params());
     req.raw_resp(raw)
 }
 
@@ -54,7 +70,7 @@ pub fn omission(req: CliRaw) {
 /// `cargo run --bin cli --no-default-features -- home name.txt`                route matched
 #[api("home/omission/{filename}.txt")]
 pub fn un_omission(mut req: CliRaw) {
-    let raw = format!(r#"".txt": {:#?}{}{:#?}"#, req.context_mut().suffix(), "\n", req.params());
+    let raw = format!(r#"".txt": {:#?}{}{:#?}"#, req.suffix(), "\n", req.params());
     req.raw_resp(raw)
 }
 
@@ -63,7 +79,7 @@ pub fn un_omission(mut req: CliRaw) {
 /// `cargo run --bin cli --no-default-features -- home name.1.txt`              route matched
 #[api("home/omission/{filename}.|1.txt")]
 pub fn un_omission2(mut req: CliRaw) {
-    let raw = format!(r#"".|1.txt": {:#?}{}{:#?}"#, req.context_mut().suffix(), "\n", req.params());
+    let raw = format!(r#"".|1.txt": {:#?}{}{:#?}"#, req.suffix(), "\n", req.params());
     req.raw_resp(raw)
 }
 
@@ -73,6 +89,6 @@ pub fn un_omission2(mut req: CliRaw) {
 /// `cargo run --bin cli --no-default-features -- home name content.1.txt`      route matched
 #[api("home/{filename}/content.|1.txt")]
 pub fn un_omission3(mut req: CliRaw) {
-    let raw = format!(r#""content.|1.txt": {:#?}{}{:#?}"#, req.context_mut().suffix(), "\n", req.params());
+    let raw = format!(r#""content.|1.txt": {:#?}{}{:#?}"#, req.suffix(), "\n", req.params());
     req.raw_resp(raw)
 }

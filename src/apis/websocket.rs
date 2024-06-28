@@ -10,15 +10,15 @@ use dce_router::serializer::Serialized;
 use dce_tokio_tungstenite::protocol::{SemiWebsocketProtocol, SemiWebsocketRaw};
 
 
-/// `cargo run --bin app -- websocket start`
+/// `set RUST_LOG=debug && cargo run --bin app --target-dir target/websocket -- websocket start`
 #[api("websocket/start")]
 pub async fn websocket_start(req: CliRaw) {
     let addr = "0.0.0.0:2047";
     let server = TcpListener::bind(addr).await.unwrap();
-    let router = Router::new()
+    let router = Router::new()?
         .push(hello)
         .push(echo)
-        .ready();
+        .ready()?;
 
     info!("Dce started at {} with tokio-tungstenite", addr);
 
@@ -45,14 +45,14 @@ pub async fn websocket_start(req: CliRaw) {
 /// `cargo run --bin app -- websocket 127.0.0.1:2047 -- hello`
 #[api]
 pub async fn hello(req: SemiWebsocketRaw) {
-    req.pack_resp(Serialized::String("hello world".to_string()))
+    req.pack(Serialized::String("hello world".to_string()))
 }
 
 /// `cargo run --bin app -- websocket 127.0.0.1:2047 -- echo "echo me"`
 #[api("echo/{param?}")]
 pub async fn echo(mut req: SemiWebsocketRaw) {
-    let body = req.rpi_mut().body().await?;
-    let param = req.param("param")?.get().unwrap_or("");
+    let body = req.rp_mut().body().await?;
+    let param = req.param("param")?.as_str().unwrap_or("");
     let body = format!(r#"path param data: "{}"{}body data: "{}""#, param, "\n", body);
-    req.pack_resp(Serialized::String(body))
+    req.pack(Serialized::String(body))
 }

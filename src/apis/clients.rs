@@ -10,14 +10,15 @@ use tokio_util::codec::{BytesCodec, Decoder, FramedRead, FramedWrite};
 use tokio_util::udp::UdpFramed;
 use url::Url;
 use dce_cli::protocol::{CliProtocol, CliRaw};
-use dce_router::protocol::CustomizedProtocolRawRequest;
 use dce_router::router::Router;
 use dce_router::serializer::Serialized;
 use dce_util::mixed::DceErr;
 use rand::random;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use dce_macro::{api, closed_err};
 
-pub fn append(router: Router<CustomizedProtocolRawRequest<CliProtocol>>) -> Router<CustomizedProtocolRawRequest<CliProtocol>> {
+pub fn append(router: Router<CliProtocol>) -> Router<CliProtocol> {
     router.push(tcp_interactive)
         .push(udp_interactive)
         .push(websocket_interactive)
@@ -35,13 +36,13 @@ pub async fn tcp_interactive(req: CliRaw) {
     let mut stdin = FramedRead::new(io::stdin(), BytesCodec::new())
         .map(|i| i.map(|bytes| bytes));
     let mut stdout = FramedWrite::new(io::stdout(), BytesCodec::new());
-    let addr = req.param("address")?.get().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
+    let addr = req.param("address")?.as_str().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
 
     let stream = TcpStream::connect(addr).await.expect("tcp connect failed");
     let (mut sink, mut stream) = BytesCodec::new().framed(stream).split();
 
     match future::join(sink.send_all(&mut stdin), stdout.send_all(&mut stream)).await {
-        (Err(e), _) | (_, Err(e)) => Err(DceErr::closed(0, e.to_string())),
+        (Err(e), _) | (_, Err(e)) => DceErr::closed0_wrap(e),
         _ => Ok(None),
     }
 }
@@ -54,7 +55,7 @@ pub async fn udp_interactive(req: CliRaw) {
     let mut stdin = FramedRead::new(io::stdin(), BytesCodec::new())
         .map(|i| i.map(|bytes| bytes));
     let mut stdout = FramedWrite::new(io::stdout(), BytesCodec::new());
-    let addr = req.param("address")?.get().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
+    let addr = req.param("address")?.as_str().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
 
     let socket = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap()).await.expect("udp bind failed");
     socket.connect(&addr).await.expect("failed to connect to the remote udp");
@@ -75,7 +76,7 @@ pub async fn udp_interactive(req: CliRaw) {
             }
         })
     ).await {
-        (Err(e), _) | (_, Err(e)) => Err(DceErr::closed(0, e.to_string())),
+        (Err(e), _) | (_, Err(e)) => DceErr::closed0_wrap(e),
         _ => Ok(None)
     }
 }
@@ -88,7 +89,7 @@ pub async fn websocket_interactive(req: CliRaw) {
     let mut stdin = FramedRead::new(io::stdin(), BytesCodec::new())
         .map(|i| i.map(|bytes| bytes));
     let mut stdout = FramedWrite::new(io::stdout(), BytesCodec::new());
-    let url = Url::parse(&format!("ws://{}/", req.param("address")?.get().unwrap())).unwrap();
+    let url = Url::parse(&format!("ws://{}/", req.param("address")?.as_str().unwrap())).unwrap();
 
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
     let (mut sink, mut stream) = ws_stream.split();
@@ -107,7 +108,7 @@ pub async fn websocket_interactive(req: CliRaw) {
             }
         })
     ).await {
-        (Err(e), _) | (_, Err(e)) => Err(DceErr::closed(0, e.to_string())),
+        (Err(e), _) | (_, Err(e)) => DceErr::closed0_wrap(e),
         _ => Ok(None)
     }
 }
@@ -117,20 +118,18 @@ pub async fn websocket_interactive(req: CliRaw) {
 /// `cargo run --bin app -- tcp 127.0.0.1:2048 -- echo "echo me"`
 #[api("tcp/{address}")]
 pub async fn tcp(req: CliRaw) {
-    let addr = req.param("address")?.get().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
+    let addr = req.param("address")?.as_str().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
     let stream = TcpStream::connect(addr).await.expect("tcp connect failed");
     let (mut sink, mut stream) = BytesCodec::new().framed(stream).split();
 
-    let pass = req.rpi().pass();
+    let pass = req.rp().pass();
     assert!(! pass.is_empty(), "pass args cannot be empty");
     match sink.send(Bytes::from(format!("0;{}>BODY>>>{}", pass.join("/"), random::<usize>()))).await {
         Ok(_) => match stream.next().await {
-            Some(Ok(msg)) => {
-                req.pack_resp(Serialized::Bytes(msg.freeze()))
-            },
+            Some(Ok(msg)) => req.pack(Serialized::Bytes(msg.freeze())),
             _ => Err(closed_err!("failed to receive message")),
         },
-        Err(err) => Err(DceErr::closed(0, err.to_string())),
+        Err(err) => DceErr::closed0_wrap(err),
     }
 }
 
@@ -138,21 +137,19 @@ pub async fn tcp(req: CliRaw) {
 /// `cargo run --bin app -- udp 127.0.0.1:2049 -- echo "echo me"`
 #[api("udp/{address}")]
 pub async fn udp(req: CliRaw) {
-    let addr = req.param("address")?.get().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
+    let addr = req.param("address")?.as_str().unwrap().parse::<SocketAddr>().expect("not a valid socket address");
     let socket = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap()).await.expect("udp connect failed");
     socket.connect(&addr).await.unwrap();
     let (mut sink, mut stream) = UdpFramed::new(socket, BytesCodec::new()).split();
 
-    let pass = req.rpi().pass();
+    let pass = req.rp().pass();
     assert!(! pass.is_empty(), "pass args cannot be empty");
     match sink.send((Bytes::from(format!("0;{}>BODY>>>{}", pass.join("/"), random::<usize>())), addr)).await {
         Ok(_) => match stream.next().await {
-            Some(Ok((msg, _))) => {
-                req.pack_resp(Serialized::Bytes(msg.freeze()))
-            },
+            Some(Ok((msg, _))) => req.pack(Serialized::Bytes(msg.freeze())),
             _ => Err(closed_err!("failed to receive message")),
         },
-        Err(err) => Err(DceErr::closed(0, err.to_string())),
+        Err(err) => DceErr::closed0_wrap(err),
     }
 }
 
@@ -160,20 +157,23 @@ pub async fn udp(req: CliRaw) {
 /// `cargo run --bin app -- websocket 127.0.0.1:2047 -- echo "echo me"`
 #[api("websocket/{address}")]
 pub async fn websocket(req: CliRaw) {
-    let addr = req.param("address")?.get().unwrap();
+    let addr = req.param("address")?.as_str().unwrap();    
     let url = Url::parse(&format!("ws://{}/", addr)).unwrap();
-    let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+    let mut ws_req = url.into_client_request().unwrap();
+    if let Some(sid) = req.rp().args().get("--sid") {
+        ws_req.headers_mut().insert("X-Session-Id", HeaderValue::from_str(sid).unwrap());
+    }
+    let data = req.rp().args().get("--data").map_or_else(|| random::<usize>().to_string(), Clone::clone);
+    let (ws_stream, _) = connect_async(ws_req).await.expect("Failed to connect");
     let (mut sink, mut stream) = ws_stream.split();
 
-    let pass = req.rpi().pass();
+    let pass = req.rp().pass();
     assert!(! pass.is_empty(), "pass args cannot be empty");
-    match sink.send(Message::from(format!("0;{}>BODY>>>{}", pass.join("/"), random::<usize>()))).await {
+    match sink.send(Message::from(format!("0;{}>BODY>>>{}", pass.join("/"), data))).await {
         Ok(_) => match stream.next().await {
-            Some(Ok(msg)) => {
-                req.pack_resp(Serialized::String(msg.to_string()))
-            },
+            Some(Ok(msg)) => req.pack(Serialized::String(msg.to_string())),
             _ => Err(closed_err!("failed to receive message")),
         },
-        Err(err) => Err(DceErr::closed(0, err.to_string())),
+        Err(err) => DceErr::closed0_wrap(err),
     }
 }

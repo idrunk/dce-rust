@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::any::Any;
 use sailfish::TemplateOnce;
 use dce_macro::closed_err;
 use dce_router::request::ResponseStatus;
@@ -27,16 +27,22 @@ impl<Dto: TemplateOnce> Serializer<Dto> for SailfishSerializer {
     }
 }
 
+impl From<Vec<(&str, Box<dyn Any>)>> for SailfishSerializer {
+    fn from(_: Vec<(&str, Box<dyn Any>)>) -> Self {
+        SailfishSerializer {}
+    }
+}
+
 
 #[derive(TemplateOnce)]
 #[template(path = "notfound.html")]
 pub struct NotFound<Dto> {
-    pub s: ResponseStatus<Dto>,
+    _s: ResponseStatus<Dto>,
 }
 
 impl<Dto> From<ResponseStatus<Dto>> for NotFound<Dto> {
     fn from(value: ResponseStatus<Dto>) -> Self {
-        NotFound {s: value}
+        NotFound {_s: value}
     }
 }
 

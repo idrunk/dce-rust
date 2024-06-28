@@ -2,12 +2,32 @@ use std::collections::HashMap;
 use proc_macro2::{Delimiter, Group, Span, TokenStream};
 use quote::quote;
 use quote::ToTokens;
-use syn::{ItemFn, Token, LitStr, LitBool, ExprAssign, ExprStruct, Expr, Lit, ExprLit, Ident, Error, ExprTuple, ExprPath, Path, Member, ExprArray, ExprCall, PathSegment, parse_quote, QSelf, Type, TypePath, FnArg, PathArguments, AngleBracketedGenericArguments, ReturnType, GenericArgument, TypeTraitObject, TypeParamBound, TraitBound, Lifetime, TraitBoundModifier, TypeReference, TypeParen, ExprClosure, Pat, PatPath, ExprMacro, Macro, MacroDelimiter};
+use syn::{ItemFn, Token, LitStr, LitBool, ExprAssign, ExprStruct, Expr, Lit, ExprLit, Ident, Error, ExprTuple, ExprPath, Path, Member, ExprArray, ExprCall, PathSegment, parse_quote, QSelf, Type, TypePath, FnArg, PathArguments, AngleBracketedGenericArguments, ReturnType, GenericArgument, TypeTraitObject, TypeParamBound, TraitBound, Lifetime, TraitBoundModifier, TypeReference, TypeParen, ExprClosure, Pat, PatPath, ExprMacro, Macro, MacroDelimiter, GenericParam, Generics, LifetimeParam, ExprCast};
 use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::token::Bracket;
 
-const ORDERED_PROPS: [&str; 8] = ["path", "serializer", "deserializer", "id", "omission", "redirect", "name", "unresponsive"];
+macro_rules! props {
+    ($($o: ident),+$(,)?) => {
+        #[allow(non_camel_case_types)]
+        #[derive(Clone, Debug)]
+        enum Prop {
+            $($o),+,
+            Extra(String),
+        }        
+        impl From<String> for Prop {
+            fn from(value: String) -> Self {
+                match value.as_str() {
+                    $(stringify!($o) => Prop::$o),+,
+                    _ => Prop::Extra(value),
+                }
+            }
+        }
+    };
+}
+props!(id, path, serializer, deserializer, redirect, omission, name, unresponsive,);
+const ORDERED_PROPS: [Prop; 8] = [Prop::path, Prop::serializer, Prop::deserializer, Prop::id, Prop::omission, Prop::redirect, Prop::name, Prop::unresponsive];
 
 pub struct Api {
     pub id: Option<Expr>,
@@ -22,36 +42,48 @@ pub struct Api {
 }
 
 impl Api {
-    fn set_by_key(&mut self, key: String, mut expr: Expr) -> Result<()> {
-        if let Expr::Array(ExprArray { elems, .. }) = expr { expr = Self::gen_bracket_macro(vec![("vec", None)], elems.to_token_stream()) };
-        let consume_if = |result: bool, callback: &mut dyn FnMut()| { if result { callback(); } result };
-        if ! match key.as_str() {
-            "id" => consume_if(matches!(self.id, None), &mut || self.id = Some(expr.clone())),
-            "path" => consume_if(matches!(self.path, None), &mut || self.path = Some(expr.clone())),
-            "serializer" => consume_if(matches!(self.serializers, None), &mut || self.serializers = Some(expr.clone())),
-            "deserializer" => consume_if(matches!(self.deserializers, None), &mut || self.deserializers = Some(expr.clone())),
-            "redirect" => consume_if(matches!(self.redirect, None), &mut || self.redirect = Some(expr.clone())),
-            "omission" => consume_if(matches!(self.omission, None), &mut || self.omission = Some(expr.clone())),
-            "name" => consume_if(matches!(self.name, None), &mut || self.name = Some(expr.clone())),
-            "unresponsive" => consume_if(matches!(self.unresponsive, None), &mut || self.unresponsive = Some(expr.clone())),
-            _ => consume_if(! self.extras.contains_key(&key), &mut || {self.extras.insert(key.clone(), expr.clone()); ()}),
+    fn set_by_key(&mut self, key: Prop, expr: Expr) -> Result<()> {
+        const CONSUME_IF: fn(bool, &mut dyn FnMut()) -> bool = |result, callback| { if result { callback(); } result };
+        if ! match &key {
+            Prop::id => CONSUME_IF(matches!(self.id, None), &mut || self.id = Some(expr.clone())),
+            Prop::path => CONSUME_IF(matches!(self.path, None), &mut || self.path = Some(expr.clone())),
+            Prop::serializer => CONSUME_IF(matches!(self.serializers, None), &mut || self.serializers = Some(expr.clone())),
+            Prop::deserializer => CONSUME_IF(matches!(self.deserializers, None), &mut || self.deserializers = Some(expr.clone())),
+            Prop::redirect => CONSUME_IF(matches!(self.redirect, None), &mut || self.redirect = Some(expr.clone())),
+            Prop::omission => CONSUME_IF(matches!(self.omission, None), &mut || self.omission = Some(expr.clone())),
+            Prop::name => CONSUME_IF(matches!(self.name, None), &mut || self.name = Some(expr.clone())),
+            Prop::unresponsive => CONSUME_IF(matches!(self.unresponsive, None), &mut || self.unresponsive = Some(expr.clone())),
+            // put all non-standard meta into extras mapping
+            Prop::Extra(key) => CONSUME_IF(! self.extras.contains_key(key), &mut || {self.extras.insert(key.clone(), expr.clone()); ()}),
         } {
-            throw!(Span::call_site(), r#"Api arg "{}" can only set once"#, key);
+            throw!(Span::call_site(), r#"Api arg "{:?}" can only set once"#, key);
         }
         Ok(())
     }
 
     fn process_controller(fn_name: String, mut func: ItemFn, request_type: Type) -> ItemFn {
         func.sig.ident = Ident::new(fn_name.as_str(), Span::call_site());
+        if ! matches!(func.sig.generics.params.first(), Some(GenericParam::Lifetime(_))) {
+            func.sig.generics = Generics {
+                lt_token: Some(parse_quote!(<)),
+                params: punctuated_create!(GenericParam::Lifetime(LifetimeParam::new(Lifetime::new("'a", func.sig.generics.span())))),
+                gt_token: Some(parse_quote!(>)),
+                where_clause: None,
+            }
+        }
         func.sig.output =  ReturnType::Type(parse_quote!(->), Box::new(Type::Path(TypePath {
             qself: None,
             path: Self::str_gen_path(vec![("dce_util", None), ("mixed", None), ("DceResult", Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(
                 punctuated_create!(GenericArgument::Type(Type::Path(TypePath{ qself: None, path: Self::str_gen_path(
                     vec![("Option", Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(punctuated_create!(
-                        GenericArgument::Type(Type::Path(TypePath{
-                            qself: Some(QSelf { lt_token: parse_quote!(<), ty: Box::new(request_type), position: 3, as_token: Some(parse_quote!(as)), gt_token: parse_quote!(>)}),
-                            path: Self::str_gen_path(vec![("dce_router", None), ("request", None), ("RawRequest", None), ("Resp", None)])
-                        }))
+                        GenericArgument::Type(Type::Path(TypePath{ qself: None, path: Self::str_gen_path(
+                            vec![("dce_router", None), ("request", None), ("Response", Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(punctuated_create!(
+                                GenericArgument::Type(Type::Path(TypePath{
+                                    qself: Some(QSelf { lt_token: parse_quote!(<), ty: Box::new(request_type), position: 3, as_token: Some(parse_quote!(as)), gt_token: parse_quote!(>)}),
+                                    path: Self::str_gen_path(vec![("dce_router", None), ("protocol", None), ("RoutableProtocol", None), ("Resp", None)])
+                                }))
+                            ), None))))]
+                        ) }))
                     ), None))))]
                 ) }))), None
             ))))])
@@ -59,29 +91,47 @@ impl Api {
         func
     }
 
-    fn get_controller_method_extras(fn_name: &str, func: &ItemFn, props: HashMap<String, Expr>) -> Result<(Expr, Expr, Punctuated<PathSegment, Token![::]>)> {
-        let segments = match func.sig.inputs.first() {
-            Some(FnArg::Typed(pt)) => match *pt.ty.clone() {
-                Type::Path(tp) => tp.path.segments,
-                _ => throw!(Span::call_site(), r"Request arg need io parser generics"),
+    fn get_controller_method_extras(fn_name: &str, func: &mut ItemFn, extras: HashMap<String, Expr>) -> Result<(Expr, Expr, Punctuated<PathSegment, Token![::]>)> {
+        let req_type_segments = match func.sig.inputs.first_mut() {
+            Some(FnArg::Typed(pt)) => match pt.ty.as_mut() {
+                Type::Path(tp) => &mut tp.path.segments,
+                _ => throw!(pt.span(), r"Request arg need io parser generics"),
             },
-            _ => throw!(Span::call_site(), r"Controller func need a Request input arg"),
+            _ => throw!(func.sig.inputs.span(), r"Controller func need a Request input arg"),
         };
-        let generic_segments = segments.clone();
-        let mut method_props: Punctuated<_, Token![,]> = Punctuated::new();
-        props.iter().for_each(|(k, v)| method_props.push(Self::gen_prop_tuple(k.as_str(), v.clone())));
-        let segments_hold = segments.into_iter().map(|ps|
+        // try to auto add lifetime generic to head of last path part        
+        if let Some(PathSegment{arguments: PathArguments::AngleBracketed(AngleBracketedGenericArguments{args: ref mut generics, ..}), ..}) = req_type_segments.last_mut() {
+            if ! generics.first().iter().all(|ga| matches!(ga, GenericArgument::Lifetime(_))) {
+                generics.insert(0, GenericArgument::Lifetime(Lifetime::new("'a", generics.span())));
+            }
+        } else if let Some(ps) = req_type_segments.last_mut() {
+            ps.arguments = PathArguments::AngleBracketed(AngleBracketedGenericArguments{
+                colon2_token: None,
+                lt_token: Default::default(),
+                args: punctuated_create!(GenericArgument::Lifetime(Lifetime::new("'a", ps.span()))),
+                gt_token: Default::default(),
+            })
+        }
+        let segment_vec = req_type_segments.clone().into_iter().map(|ps|
             (ps.ident.to_string(), if let PathArguments::AngleBracketed(mut abga) = ps.arguments {
                 abga.colon2_token = parse_quote!(::); Some(PathArguments::AngleBracketed(abga))
             } else { None })
         ).collect::<Vec<_>>();
-        let mut segments = segments_hold.iter().map(|(p, pa)| (p.as_str(), pa.clone())).collect::<Vec<_>>();
-        segments.push(("parse_api_method_and_extras", None));
-        let method_extras = Self::gen_expr_call(punctuated_create!(Self::gen_bracket_macro(vec![("vec", None)], method_props.to_token_stream())), segments, None);
+        // rebuild the request arg type segments to method call style segments
+        let segment_vec = segment_vec.iter().map(|(p, pa)| (p.as_str(), pa.clone())).collect::<Vec<_>>();
+        // build method and extras data tuple vec
+        let extras: Punctuated<_, Token![,]> = Punctuated::from_iter(extras.into_iter().map(|(k, mut v)| Self::gen_prop_tuple(k.as_str(), {
+            // rewrap with vec macro if extra value is an array expr
+            if let Expr::Array(ExprArray { elems, .. }) = v { v = Self::gen_bracket_macro(vec![("vec", None)], elems.to_token_stream()) }; v})));
+        let method_extras = Self::gen_expr_call(punctuated_create!(Self::gen_bracket_macro(vec![("vec", None)], extras.to_token_stream())), 
+            vec![("dce_router", None), ("protocol", None), ("RoutableProtocol", None), ("parse_api_method_and_extras", None)],
+            Some(Self::gen_qself(vec![("dce_router", None), ("request", None), ("RequestTrait", None), ("Rp", None)],
+                Some(Self::gen_qself(segment_vec.iter().map(|(path, generic)| (*path, generic.clone())).collect(), None, 3)), 3)));
 
+        // build Controller enum
         let controller = if func.sig.asyncness.is_none() {
             Self::gen_expr_call(punctuated_create!(Expr::Path(ExprPath{attrs: vec![], qself: None, path: Self::str_gen_path(vec![(fn_name, None)])})),
-                                vec![("dce_router", None), ("api", None), ("Controller", None), ("Sync", None)], None)
+                vec![("dce_router", None), ("api", None), ("Controller", None), ("Sync", None)], None)
         } else {
             let path = Self::str_gen_path(vec![("var", None)]);
             Self::gen_expr_call(punctuated_create!(Self::gen_expr_call(punctuated_create!(Expr::Closure(ExprClosure {
@@ -92,7 +142,7 @@ impl Api {
                     vec![("Box", None), ("pin", None)], None)),
             })), vec![("Box", None), ("new", None)], None)), vec![("dce_router", None), ("api", None), ("Controller", None), ("Async", None)], None)
         };
-        Ok((controller, method_extras, generic_segments))
+        Ok((controller, method_extras, req_type_segments.clone()))
     }
 
     fn gen_prop_tuple(key: &str, value: Expr) -> Expr {
@@ -103,13 +153,41 @@ impl Api {
                 Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Str(LitStr::new(key, Span::call_site())) }),
                 match value {
                     call @ Expr::Call(_) if matches!(&call, Expr::Call(ExprCall{func, ..}) if func.to_token_stream().to_string().starts_with("Box")) => call,
-                    expr => Self::gen_expr_call(punctuated_create!(match expr {
-                        Expr::Struct(struc) => Self::struct_to_converter(&struc, Punctuated::new(), vec![]),
-                        expr => expr,
-                    }), vec![("Box", None), ("new", None)], None),
+                    expr => {
+                        let is_lit = matches!(expr, Expr::Lit(_));
+                        let mut boxed = Self::gen_expr_call(punctuated_create!(match expr {
+                            Expr::Struct(struc) => Self::struct_to_converter(&struc, vec![]),
+                            expr => expr,
+                        }), vec![("Box", None), ("new", None)], None);
+                        if is_lit {
+                            // need an explicit cast to Box<dyn Any> if value is a literal
+                            boxed = Expr::Cast(ExprCast { attrs: vec![], expr: Box::new(boxed), as_token: Default::default(), ty: Box::new(parse_quote!(Box<dyn std::any::Any>))})
+                        }
+                        boxed
+                    },
                 }
             ),
         })
+    }
+
+    fn struct_to_converter(expr_struct: &ExprStruct, excludes: Vec<&str>) -> Expr {
+        let mut paths = expr_struct.path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>();
+        paths.push("from".to_string());
+        let props: Punctuated<_, Token![,]> = Punctuated::from_iter(expr_struct.fields.iter().filter_map(|f| Some(match &f.member {
+            Member::Named(name) => name.to_string(),
+            Member::Unnamed(name) => name.index.to_string(),
+        }).filter(|n| ! excludes.contains(&n.as_str())).map(|n| Self::gen_prop_tuple(n.as_str(), f.expr.clone()))));
+        Self::gen_expr_call(
+            punctuated_create!(Self::gen_bracket_macro(vec![("vec", None)], props.to_token_stream())),
+            paths.iter().map(|ps| (ps.as_str(), None)).collect(), None,
+        )
+    }
+    
+    fn try_struct_to_boxed_converter(expr: Expr) -> Expr {
+        Api::gen_expr_call(punctuated_create!(match expr {
+            Expr::Struct(expr_struct) => Self::struct_to_converter(&expr_struct, vec![]),
+            expr => expr,
+        }), vec![("Box", None), ("new", None)], None)
     }
 
     fn gen_ab_generic_args(generics: Punctuated<GenericArgument, Token![,]>, colon2_token: Option<Token![::]>) -> AngleBracketedGenericArguments {
@@ -132,25 +210,10 @@ impl Api {
         }).collect() }
     }
 
-    fn struct_to_converter(stru: &ExprStruct, generics: Punctuated<GenericArgument, Token![,]>, excludes: Vec<&str>) -> Expr {
-        let mut props = Punctuated::new();
-        stru.fields.iter().for_each(|f| if let Some(name) = match &f.member {
-            Member::Named(name) => match name.to_string() { name if excludes.contains(&name.as_str()) => None, name => Some(name), },
-            Member::Unnamed(name) => Some(name.to_token_stream().to_string()),
-        } { props.push(Self::gen_prop_tuple(name.as_str(), f.expr.clone())); });
-        let (last_seg_idx, paths) = (stru.path.segments.len() - 1, stru.path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>());
-        Self::gen_expr_call(
-            punctuated_create!(Expr::Array(ExprArray { attrs: vec![], bracket_token: Default::default(), elems: props, })),
-            vec![("dce_router", None), ("api", None), ("ToStruct", None), ("from", None)],
-            Some(Self::gen_qself(paths.iter().enumerate().map(|(idx, path)| (path.as_str(), if generics.is_empty() || idx < last_seg_idx {None} else {
-                Some(PathArguments::AngleBracketed(Self::gen_ab_generic_args(generics.clone(), None)))})).collect(), 3)),
-        )
-    }
-
-    fn gen_qself(segments: Vec<(&str, Option<PathArguments>)>, position: usize) -> QSelf {
+    fn gen_qself(segments: Vec<(&str, Option<PathArguments>)>, qself: Option<QSelf>, position: usize) -> QSelf {
         QSelf {
             lt_token: parse_quote!(<),
-            ty: Box::new(Type::Path(TypePath { qself: None, path: Self::str_gen_path(segments) })),
+            ty: Box::new(Type::Path(TypePath { qself, path: Self::str_gen_path(segments) })),
             position,
             as_token: Some(parse_quote!(as)),
             gt_token: parse_quote!(>),
@@ -167,55 +230,44 @@ impl Api {
     }
 
     fn gen_serializers(serializers: Option<Expr>, deserializers: Option<Expr>) -> (Expr, Expr) {
-        let serializers = match serializers {
-            Some(vec @ Expr::MethodCall(_)) => vec,
-            Some(serializer) => Self::gen_bracket_macro(
-                vec![("vec", None)],
-                Self::gen_expr_call(punctuated_create!(serializer), vec![("Box", None), ("new", None)], None).to_token_stream()
-            ),
-            _ => Self::gen_bracket_macro(vec![("vec", None)], Self::gen_expr_call(punctuated_create!(Self::struct_to_converter(&ExprStruct {
-                attrs: vec![],
-                qself: None,
-                path: Self::str_gen_path(vec![("dce_router", None), ("serializer", None), ("UnreachableSerializer", None)]),
-                brace_token: Default::default(),
-                fields: Default::default(),
-                dot2_token: None,
-                rest: None,
-            }, Punctuated::new(), vec![])), vec![("Box", None), ("new", None)], None).to_token_stream()),
+        const PROCESSOR: fn(Option<Expr>, Option<&Expr>) -> Expr = |configured, serializer| {
+            match configured {
+                // if is a vec just return directly no matter the items is boxed
+                Some(ref vec @ Expr::Macro(ExprMacro{mac: Macro{ref path, ..}, ..})) if path.to_token_stream().to_string().starts_with("vec") => vec.clone(),
+                Some(Expr::Array(ExprArray { elems, .. })) => Api::gen_bracket_macro(
+                    vec![("vec", None)], Punctuated::<_, Token![,]>::from_iter(elems.into_iter().map(Api::try_struct_to_boxed_converter)).to_token_stream()),
+                Some(serializer) => Api::gen_bracket_macro(vec![("vec", None)], Api::try_struct_to_boxed_converter(serializer).to_token_stream()),
+                // else clone the serializer if passed or new an empty vec macro
+                _ => serializer.map_or_else(|| Api::gen_bracket_macro(vec![("vec", None)], TokenStream::new()), Clone::clone),
+            }
         };
-        let deserializers = match deserializers {
-            Some(vec @ Expr::MethodCall(_)) => vec,
-            Some(deserializers) => Self::gen_bracket_macro(
-                vec![("vec", None)],
-                Self::gen_expr_call(punctuated_create!(deserializers), vec![("Box", None), ("new", None)], None).to_token_stream(),
-            ),
-            _ => serializers.clone(),
-        };
+        let serializers = PROCESSOR(serializers, None);
+        let deserializers = PROCESSOR(deserializers, Some(&serializers));
         (serializers, deserializers)
     }
 
-    pub fn processing(self, input: ItemFn) -> (ItemFn, Ident, ReturnType, TokenStream) {
+    pub fn processing(self, mut input: ItemFn) -> (ItemFn, Ident, ReturnType, TokenStream) {
         let Self{path, id, serializers, deserializers, omission, redirect, name,unresponsive , extras} = self;
         let route_fn_name = input.sig.ident.clone();
         let mut fn_name = input.sig.ident.to_string();
-        let path = if let Some(e) = path { e } else { Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Str(LitStr::new(fn_name.as_str(), Span::call_site())) }) };
-        let id = if let Some(e) = id { e } else { Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Str(LitStr::new("", Span::call_site())) }) };
+        let path = path.unwrap_or_else(|| Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Str(LitStr::new(fn_name.as_str(), Span::call_site())) }));
+        let id = id.unwrap_or_else(|| Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Str(LitStr::new("", Span::call_site())) }));
         let (serializers, deserializers) = Self::gen_serializers(serializers, deserializers);
-        let omission = if let Some(e) = omission { e } else { Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Bool(LitBool::new(false, Span::call_site())) }) };
-        let redirect = if let Some(e) = redirect { e } else { Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Str(LitStr::new("", Span::call_site())) }) };
-        let name = if let Some(e) = name { e } else { Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Str({
+        let omission = omission.unwrap_or_else(|| Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Bool(LitBool::new(false, Span::call_site())) }));
+        let redirect = redirect.unwrap_or_else(|| Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Str(LitStr::new("", Span::call_site())) }));
+        let name = name.unwrap_or_else(|| Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Str({
             let path = path.clone().into_token_stream().to_string().trim_matches('"').to_string();
             LitStr::new(&path.as_str()[path.rfind('/').map_or(0, |i| i + 1)..], Span::call_site())
-        })}) };
-        let unresponsive = if let Some(e) = unresponsive { e } else { Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Bool(LitBool::new(false, Span::call_site())) }) };
+        })}));
+        let unresponsive = unresponsive.unwrap_or_else(|| Expr::Lit(ExprLit { attrs: vec![], lit: Lit::Bool(LitBool::new(false, Span::call_site())) }));
 
         fn_name.push_str("_api");
-        let (controller, method_extras, generic_segments) = Self::get_controller_method_extras(fn_name.as_str(), &input, extras)
+        let (controller, method_extras, req_type_segments) = Self::get_controller_method_extras(fn_name.as_str(), &mut input, extras)
             .unwrap_or_else(|err| panic!("{}", err));
-        let paths_holder = generic_segments.iter().map(|seg| (seg.ident.to_string(), Some(seg.arguments.clone()))).collect::<Vec<(_, _)>>();
+        let paths = req_type_segments.iter().map(|seg| (seg.ident.to_string(), Some(seg.arguments.clone()))).collect::<Vec<(_, _)>>();
         let request_type = Type::Path(TypePath {
-            qself: Some(Self::gen_qself(paths_holder.iter().map(|(path, generic)| (path.as_str(), generic.clone())).collect(), 3)),
-            path: Self::str_gen_path(vec![("dce_router", None), ("request", None), ("RequestTrait", None), ("Raw", None)])
+            qself: Some(Self::gen_qself(paths.iter().map(|(path, generic)| (path.as_str(), generic.clone())).collect(), None, 3)),
+            path: Self::str_gen_path(vec![("dce_router", None), ("request", None), ("RequestTrait", None), ("Rp", None)])
         });
         let return_type = ReturnType::Type(parse_quote!(->), Box::new(Type::Reference(TypeReference{
             and_token: Default::default(),
@@ -270,12 +322,11 @@ impl Parse for Api {
         while let Ok(expr) = input.parse() {
             match expr {
                 Expr::Assign(ExprAssign{left, right, ..}) => match *left {
-                    Expr::Path(expr) => api.set_by_key(expr.path.get_ident().unwrap().to_string(), *right)?,
+                    Expr::Path(expr) => api.set_by_key(Prop::from(expr.path.get_ident().map_or_else(|| panic!("Cannot unwrap"), ToString::to_string)), *right)?,
                     _ => throw!(Span::call_site(), "Arg name of api was invalid"),
                 },
                 expr => {
-                    let prop = *ORDERED_PROPS.get(prop_index).unwrap_or_else(|| panic!(r#"Api argument index "{}" was invalid"#, prop_index));
-                    api.set_by_key(prop.to_string(), expr)?;
+                    api.set_by_key(ORDERED_PROPS.get(prop_index).unwrap_or_else(|| panic!(r#"Api argument index "{}" was invalid"#, prop_index)).clone(), expr)?;
                     prop_index += 1;
                 },
             }

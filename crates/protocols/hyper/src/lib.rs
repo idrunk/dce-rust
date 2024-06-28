@@ -1,3 +1,3 @@
 pub mod protocol;
-pub mod request;
+#[cfg(feature = "sailfish")]
 pub mod serializer;

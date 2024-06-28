@@ -1,19 +1,19 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::env::args;
+use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use dce_router::protocol::{CustomizedProtocolRawRequest, RoutableProtocol};
-use dce_router::request::{RawRequest, Request, RequestContext};
+use dce_router::protocol::{HEAD_PATH_NAME, Meta, RoutableProtocol};
+use dce_router::request::{Request, Context, Response};
 use dce_router::router::Router;
 use dce_router::serializer::Serialized;
 use dce_util::mixed::DceResult;
 #[cfg(feature = "async")]
 use async_trait::async_trait;
 
-
-pub type CliRaw = Request<CustomizedProtocolRawRequest<CliProtocol>, (), (), (), ()>;
-pub type CliRequest<Resp> = Request<CustomizedProtocolRawRequest<CliProtocol>, (), (), Resp, Resp>;
-pub type CliConvert<Resp, RespDto> = Request<CustomizedProtocolRawRequest<CliProtocol>, (), (), Resp, RespDto>;
+pub type CliRaw<'a> = Request<'a, CliProtocol, (), ()>;
+pub type CliGet<'a, Resp> = Request<'a, CliProtocol, (), Resp>;
 
 const PASS_SEPARATOR: &str = "--";
 
@@ -24,19 +24,14 @@ enum ArgType {
     Path, // path type arg
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CliProtocol {
-    raw: Vec<String>,
-    path: String,
+    meta: Meta<Vec<String>, String>,
     pass: Vec<String>,
     args: HashMap<String, String>,
 }
 
 impl CliProtocol {
-    pub fn raw(&self) -> &Vec<String> {
-        &self.raw
-    }
-
     pub fn pass(&self) -> &Vec<String> {
         &self.pass
     }
@@ -50,19 +45,15 @@ impl CliProtocol {
     }
 
     #[cfg(feature = "async")]
-    pub async fn route(self, router: Arc<Router<CustomizedProtocolRawRequest<Self>>>, context_data: HashMap<String, Box<dyn Any + Send>>) {
-        if let Some(resp) = CliProtocol::default().handle_result(CustomizedProtocolRawRequest::route(
-            RequestContext::new(router, CustomizedProtocolRawRequest::new(self)).set_data(context_data)
-        ).await) {
+    pub async fn route(self, router: Arc<Router<Self>>, context_data: HashMap<String, Box<dyn Any + Send>>) {
+        if let Some(resp) = Self::handle(self, router, context_data).await {
             println!("{resp}");
         }
     }
 
     #[cfg(not(feature = "async"))]
-    pub fn route(self, router: Arc<Router<CustomizedProtocolRawRequest<Self>>>, context_data: HashMap<String, Box<dyn Any + Send>>) {
-        if let Some(resp) = CliProtocol::default().handle_result(CustomizedProtocolRawRequest::route(
-            RequestContext::new(router, CustomizedProtocolRawRequest::new(self)).set_data(context_data)
-        )) {
+    pub fn route(self, router: Arc<Router<Self>>, context_data: HashMap<String, Box<dyn Any + Send>>) {
+        if let Some(resp) = Self::handle(self, router, context_data) {
             println!("{resp}");
         }
     }
@@ -70,7 +61,7 @@ impl CliProtocol {
     pub fn new(base: usize) -> Self {
         let raw = args().collect::<Vec<_>>();
         let mut cli = Self::from(raw.iter().skip(base).map(|a| a.clone()).collect::<Vec<_>>());
-        cli.raw = raw;
+        *cli.req_mut() = Some(raw);
         cli
     }
 
@@ -102,20 +93,44 @@ impl From<Vec<String>> for CliProtocol {
                         _ => String::new(),
                     });
                 },
-                ArgType::DownFlowSeparator => {
-                    while ! value.is_empty() { pass.push(value.remove(0)); }
+                ArgType::DownFlowSeparator => while ! value.is_empty() {
+                    pass.push(value.remove(0));
                 },
-                _ => { paths.push(arg); },
+                _ => paths.push(arg),
             }
         }
 
-        CliProtocol { raw: vec![], path: paths.join("/"), pass, args }
+        CliProtocol { meta: Meta::new(vec![], HashMap::from([(HEAD_PATH_NAME.to_string(), paths.join("/"))])), pass, args }
     }
 }
 
 impl Into<String> for CliProtocol {
-    fn into(self) -> String {
-        unreachable!()
+    fn into(mut self) -> String {
+        #[allow(unused_mut)]
+        let mut resp = match self.resp_mut().take() {
+            Some(Response::Serialized(sd)) => self.pack_resp(sd),
+            Some(Response::Raw(resp)) => resp,
+            _ => "".to_string(),
+        };
+        #[cfg(feature = "session")]
+        if let Some(resp_sid) = self.get_resp_sid() {
+            resp.push_str(format!("\n\nNew sid: {}", resp_sid).as_str());
+        }
+        resp
+    }
+}
+
+impl Deref for CliProtocol {
+    type Target = Meta<Vec<String>, String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.meta
+    }
+}
+
+impl DerefMut for CliProtocol {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.meta
     }
 }
 
@@ -123,10 +138,6 @@ impl Into<String> for CliProtocol {
 impl RoutableProtocol for CliProtocol {
     type Req = Vec<String>;
     type Resp = String;
-
-    fn path(&self) -> &str {
-        &self.path
-    }
 
     #[cfg(feature = "async")]
     async fn body(&mut self) -> DceResult<Serialized> {
@@ -138,18 +149,23 @@ impl RoutableProtocol for CliProtocol {
         unreachable!("not support cli body yet")
     }
 
-    fn pack_resp(self, serialized: Serialized) -> Self::Resp {
+    fn pack_resp(&self, serialized: Serialized) -> Self::Resp {
         match serialized {
             Serialized::String(str) => str,
             Serialized::Bytes(bytes) => String::from_utf8_lossy(bytes.as_ref()).to_string(),
         }
     }
 
-    fn handle_result(self, (unresponsive, response): (Option<bool>, DceResult<Option<Self::Resp>>)) -> Option<String>{
-        Self::try_print_err(&response);
-        if let Ok(Some(resp)) = if unresponsive.unwrap_or(true) { Ok(None) } else { response } {
-            return Some(resp);
+    fn handle_result(self, result: DceResult<()>, context: &mut Context<Self>) -> Option<Self::Resp> {
+        Self::try_print_err(&result);
+        if ! result.is_err() && ! context.api().map_or(false, |a| a.unresponsive()) {
+            return Some(self.into());
         }
         None
+    }
+
+    #[cfg(feature = "session")]
+    fn sid(&self) -> Option<&str> {
+        self.args.get("--sid").map(|a| a.as_str())
     }
 }

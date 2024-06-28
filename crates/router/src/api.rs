@@ -1,11 +1,10 @@
-use std::any::{Any, type_name};
+use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::{Debug, Formatter};
 use crate::serializer::{Deserializer, Serializer};
-use crate::request::{RawRequest, Request, RequestContext};
+use crate::request::{Request, Context, Response};
 use dce_util::mixed::DceResult;
-use std::marker::PhantomData;
 #[cfg(feature = "async")]
 use std::future::Future;
 use std::ops::Deref;
@@ -13,7 +12,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 #[cfg(feature = "async")]
 use async_trait::async_trait;
-use dce_util::string::merge_consecutive_char;
+use crate::protocol::RoutableProtocol;
 use crate::router::{PATH_PART_SEPARATOR, SUFFIX_BOUNDARY};
 
 
@@ -21,22 +20,20 @@ const SUFFIX_SEPARATOR: char = '|';
 
 
 #[derive(Debug)]
-pub struct Api<Raw, ReqDto, Req, Resp, RespDto>
-    where Raw: RawRequest + Debug + 'static,
+pub struct Api<Rp, ReqDto, RespDto>
+    where Rp: RoutableProtocol + Send + Sync + Debug + 'static,
           ReqDto: 'static,
-          Req: From<ReqDto> + 'static,
-          Resp: Into<RespDto> + 'static,
           RespDto: 'static
 {
-    controller: Controller<Request<Raw, ReqDto, Req, Resp, RespDto>, Raw::Resp>,
+    controller: Controller<Rp, ReqDto, RespDto>,
     // 渲染器集，定义节点响应支持的渲染方式，如 apis `GET` 请求当后缀为`.html`时以HTTP渲染器渲染，当后缀为`.xml`时以XML渲染器渲染
-    /// Renderer vector, a response could be render by different way,
-    /// for example a apis `GET` request could be render to html when url suffix is `.html`, or render to xml when url suffix is `.xml`
+    /// Renderer vector, a response could to render by different way,
+    /// for example an `GET` request could render to html when url suffix is `.html`, or render to xml when url suffix is `.xml`
     deserializers: Vec<Box<dyn Deserializer<ReqDto> + Send + Sync>>,
     serializers: Vec<Box<dyn Serializer<RespDto> + Send + Sync>>,
     // `method` 用于定义当前节点支持的请求方式，如定义`Http`请求仅支持`["OPTION", "POST"]`
     /// Define supported request methods for current Api, for example define the `Http` request only support `["OPTION", "POST"]` methods
-    method: Option<Box<dyn Method<Raw::Rpi> + Send + Sync>>,
+    method: Option<Box<dyn Method<Rp> + Send + Sync>>,
     path: &'static str,
     suffixes: BTreeSet<Suffix>,
     id: &'static str,
@@ -47,22 +44,18 @@ pub struct Api<Raw, ReqDto, Req, Resp, RespDto>
     // 扩展属性，可用于定义如校验方式等通用节点配置
     /// Extends properties, can be used to define general api configs such as verification methods
     extras: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
-    _marker: PhantomData<Req>,
-    _marker2: PhantomData<Resp>,
 }
 
-impl<Raw, ReqDto, Req, Resp, RespDto> Api<Raw, ReqDto, Req, Resp, RespDto>
-    where Raw: RawRequest + Debug + 'static,
+impl<Rp, ReqDto, RespDto> Api<Rp, ReqDto, RespDto>
+    where Rp: RoutableProtocol + Debug + Send + Sync + 'static,
           ReqDto: 'static,
-          Req: From<ReqDto> + 'static,
-          Resp: Into<RespDto> + 'static,
           RespDto: 'static
 {
     pub fn new(
-        controller: Controller<Request<Raw, ReqDto, Req, Resp, RespDto>, Raw::Resp>,
+        controller: Controller<Rp, ReqDto, RespDto>,
         deserializers: Vec<Box<dyn Deserializer<ReqDto> + Send + Sync>>,
         serializers: Vec<Box<dyn Serializer<RespDto> + Send + Sync>>,
-        method: Option<Box<dyn Method<Raw::Rpi> + Send + Sync>>,
+        method: Option<Box<dyn Method<Rp> + Send + Sync>>,
         path: &'static str,
         id: &'static str,
         omission: bool,
@@ -71,7 +64,7 @@ impl<Raw, ReqDto, Req, Resp, RespDto> Api<Raw, ReqDto, Req, Resp, RespDto>
         unresponsive: bool,
         extras: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
     ) -> Self {
-        let mut path = &*Box::leak(merge_consecutive_char(path.trim_matches(PATH_PART_SEPARATOR), PATH_PART_SEPARATOR).into_boxed_str());
+        let mut path = path.trim_matches(PATH_PART_SEPARATOR);
         let mut suffixes = BTreeSet::from([Suffix("")]);
         if let Some(last_part_from) = path.rfind(PATH_PART_SEPARATOR).map_or_else(|| Some(0), |i| Some(i + 1)) {
             let last_part = &path[last_part_from..];
@@ -80,10 +73,10 @@ impl<Raw, ReqDto, Req, Resp, RespDto> Api<Raw, ReqDto, Req, Resp, RespDto>
                 path = &path[0.. last_part_from + bound_index];
             }
         }
-        Api { controller, deserializers, serializers, method, path, suffixes, id, omission, redirect, name, unresponsive, extras, _marker: Default::default(), _marker2: Default::default(), }
+        Api { controller, deserializers, serializers, method, path, suffixes, id, omission, redirect, name, unresponsive, extras, }
     }
 
-    pub fn controller(&self) -> &Controller<Request<Raw, ReqDto, Req, Resp, RespDto>, Raw::Resp> {
+    pub fn controller(&self) -> &Controller<Rp, ReqDto, RespDto> {
         &self.controller
     }
 
@@ -97,8 +90,8 @@ impl<Raw, ReqDto, Req, Resp, RespDto> Api<Raw, ReqDto, Req, Resp, RespDto>
 }
 
 #[cfg_attr(feature = "async", async_trait)]
-pub trait ApiTrait<Raw: RawRequest> {
-    fn method(&self) -> &Option<Box<dyn Method<Raw::Rpi> + Send + Sync>>;
+pub trait ApiTrait<Rp: RoutableProtocol> {
+    fn method(&self) -> &Option<Box<dyn Method<Rp> + Send + Sync>>;
     fn path(&self) -> &'static str;
     fn suffixes(&self) -> &BTreeSet<Suffix>;
     fn id(&self) -> &'static str;
@@ -107,22 +100,20 @@ pub trait ApiTrait<Raw: RawRequest> {
     fn name(&self) -> &'static str;
     fn unresponsive(&self) -> bool;
     fn extras(&self) -> &HashMap<&'static str, Box<dyn Any + Send + Sync>>;
-    fn method_match(&self, raw: &Raw) -> bool;
+    fn method_match(&self, rp: &Rp) -> bool;
     #[cfg(feature = "async")]
-    async fn call_controller(&'static self, context: RequestContext<Raw>) -> DceResult<Option<Raw::Resp>>;
+    async fn call_controller<'a>(&'static self, context: &'a mut Context<Rp>) -> DceResult<()>;
     #[cfg(not(feature = "async"))]
-    fn call_controller(&'static self, context: RequestContext<Raw>) -> DceResult<Option<Raw::Resp>>;
+    fn call_controller<'a>(&'static self, context: &'a mut Context<Rp>) -> DceResult<()>;
 }
 
 #[cfg_attr(feature = "async", async_trait)]
-impl<Raw, ReqDto, Req, Resp, RespDto> ApiTrait<Raw> for Api<Raw, ReqDto, Req, Resp, RespDto>
-    where Raw: RawRequest + Debug + Send + 'static,
+impl<Rp, ReqDto, RespDto> ApiTrait<Rp> for Api<Rp, ReqDto, RespDto>
+    where Rp: RoutableProtocol + Send + Sync + Debug + 'static,
           ReqDto: 'static,
-          Req: From<ReqDto> + Debug + Send + Sync + 'static,
-          Resp: Into<RespDto> + Send + Sync + 'static,
           RespDto: 'static
 {
-    fn method(&self) -> &Option<Box<dyn Method<Raw::Rpi> + Send + Sync>> {
+    fn method(&self) -> &Option<Box<dyn Method<Rp> + Send + Sync>> {
         &self.method
     }
 
@@ -158,44 +149,53 @@ impl<Raw, ReqDto, Req, Resp, RespDto> ApiTrait<Raw> for Api<Raw, ReqDto, Req, Re
         &self.extras
     }
 
-    fn method_match(&self, raw: &Raw) -> bool {
+    fn method_match(&self, rp: &Rp) -> bool {
         match &self.method {
-            Some(method) => method.req_match(raw.raw()),
+            Some(method) => method.req_match(rp),
             _ => true
         }
     }
 
     #[cfg(feature = "async")]
-    async fn call_controller(&'static self, mut context: RequestContext<Raw>) -> DceResult<Option<Raw::Resp>> {
+    async fn call_controller<'a>(&'static self, context: &'a mut Context<Rp>) -> DceResult<()> {
         if context.router().before_controller().is_some() {
-            context = match &context.router().clone().before_controller() {
-                Some(BeforeController::Sync(func)) => func(context)?,
-                #[cfg(feature = "async")]
-                Some(BeforeController::Async(func)) => func(context).await?,
-                _ => context,
+            match context.router().clone().before_controller() {
+                Some(EventHandler::Sync(func)) => func(context)?,
+                Some(EventHandler::Async(func)) => func(context).await?,
+                _ => {},
             };
         }
         let req = Request::new(self, context);
-        match &self.controller {
+        *context.rp_mut().resp_mut() = match &self.controller {
             Controller::Async(controller) => controller(req).await,
             Controller::Sync(controller) => controller(req),
+        }?;
+        if context.router().after_controller().is_some() {
+            match context.router().clone().after_controller() {
+                Some(EventHandler::Sync(func)) => func(context)?,
+                Some(EventHandler::Async(func)) => func(context).await?,
+                _ => {},
+            };
         }
+        Ok(())
     }
 
     #[cfg(not(feature = "async"))]
-    fn call_controller(&'static self, mut context: RequestContext<Raw>) -> DceResult<Option<Raw::Resp>> {
+    fn call_controller<'a>(&'static self, context: &'a mut Context<Rp>) -> DceResult<()> {
         if context.router().before_controller().is_some() {
-            context = match &context.router().clone().before_controller() {
-                Some(BeforeController::Sync(func)) => func(context)?,
-                _ => context,
-            };
+            if let Some(EventHandler::Sync(func)) = context.router().clone().before_controller() { func(context)?; }
         }
+        let req = Request::new(self, context);
         let Controller::Sync(controller) = &self.controller;
-        controller(Request::new(self, context))
+        *context.rp_mut().resp_mut() = controller(req)?;
+        if context.router().after_controller().is_some() {
+            if let Some(crate::api::EventHandler::Sync(func)) = context.router().clone().after_controller() { func(context)?; }
+        }
+        Ok(())
     }
 }
 
-impl<Raw: RawRequest> Debug for dyn ApiTrait<Raw> + Send + Sync + 'static {
+impl<Rp: RoutableProtocol> Debug for dyn ApiTrait<Rp> + Send + Sync + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(format!(r#"Api{{method: {:?}, path: "{}", suffixes: {:?}, id: "{}", omission: {}, redirect: "{}", name: "{}", unresponsive: {}, extras: {:?}}}"#,
                             self.method(), self.path(), self.suffixes(), self.id(), self.omission(), self.redirect(), self.name(), self.unresponsive(), self.extras()).as_str())
@@ -235,27 +235,33 @@ impl Ord for Suffix {
 }
 
 
-pub trait Method<Raw> {
+pub trait Method<Rp> {
     fn to_string(&self) -> String;
-    fn req_match(&self, raw: &Raw) -> bool;
+    fn req_match(&self, raw: &Rp) -> bool;
 }
 
-impl<Raw> Debug for dyn Method<Raw> + Send + Sync + 'static {
+impl<Rp> Debug for dyn Method<Rp> + Send + Sync + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.to_string().as_str())
     }
 }
 
 
-pub enum Controller<Req, Ret> {
-    Sync(fn(Req) -> DceResult<Option<Ret>>),
+pub enum Controller<Rp, ReqDto, RespDto>
+    where Rp: RoutableProtocol + Debug + Send + Sync + 'static,
+          ReqDto: 'static,
+          RespDto: 'static {
+    Sync(fn(Request<'_, Rp, ReqDto, RespDto>) -> DceResult<Option<Response<Rp::Resp>>>),
     #[cfg(feature = "async")]
-    Async(Box<dyn Fn(Req) -> Pin<Box<dyn Future<Output = DceResult<Option<Ret>>> + Send>> + Send + Sync>),
+    Async(Box<dyn Fn(Request<'_, Rp, ReqDto, RespDto>) -> Pin<Box<dyn Future<Output = DceResult<Option<Response<Rp::Resp>>>> + Send + '_>> + Send + Sync>),
 }
 
-impl<Req, Ret> Debug for Controller<Req, Ret> {
-    fn fmt(&self, fomatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        fomatter.write_str(format!("{} controller", match &self {
+impl<Rp, ReqDto, RespDto> Debug for Controller<Rp, ReqDto, RespDto>
+    where Rp: RoutableProtocol + Debug + Send + Sync + 'static,
+          ReqDto: 'static,
+          RespDto: 'static {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        formatter.write_str(format!("{} controller", match &self {
             Controller::Sync(_) => "A sync",
             #[cfg(feature = "async")]
             _ => "An async"
@@ -264,27 +270,18 @@ impl<Req, Ret> Debug for Controller<Req, Ret> {
 }
 
 
-pub enum BeforeController<Raw: RawRequest + 'static> {
-    Sync(fn(RequestContext<Raw>) -> DceResult<RequestContext<Raw>>),
+pub enum EventHandler<Rp: RoutableProtocol + 'static> {
+    Sync(fn(&mut Context<Rp>) -> DceResult<()>),
     #[cfg(feature = "async")]
-    Async(Box<dyn Fn(RequestContext<Raw>) -> Pin<Box<dyn Future<Output = DceResult<RequestContext<Raw>>> + Send>> + Send + Sync>),
+    Async(Box<dyn for <'a> Fn(&'a mut Context<Rp>) -> Pin<Box<dyn Future<Output = DceResult<()>> + Send + 'a>> + Send + Sync>),
 }
 
-impl<Raw: RawRequest + 'static> Debug for BeforeController<Raw> {
-    fn fmt(&self, fomatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        fomatter.write_str(format!("{} function", match &self {
-            BeforeController::Sync(_) => "A sync",
+impl<Rp: RoutableProtocol + 'static> Debug for EventHandler<Rp> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        formatter.write_str(format!("{} function", match &self {
+            EventHandler::Sync(_) => "A sync",
             #[cfg(feature = "async")]
             _ => "An async"
         }).as_str())
-    }
-}
-
-
-pub trait ToStruct {
-    fn from<const N: usize>(value: [(&str, Box<dyn Any>); N]) -> Self;
-
-    fn map_remove_downcast<T: 'static>(map: &mut HashMap<&str, Box<dyn Any + Send + Sync>>, key: &str) -> T {
-        map.remove(key).map(|v| *v.downcast::<T>().unwrap_or_else(|_| panic!("'{}' property cannot cast to '{}'", key, type_name::<T>()))).unwrap()
     }
 }

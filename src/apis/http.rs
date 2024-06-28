@@ -6,10 +6,9 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use log::info;
 use sailfish::TemplateOnce;
-use dce_hyper::request::HttpRawRequest;
-use dce_hyper::request::HttpMethod::{Get, Options, Post};
-use dce_router::api::BeforeController;
-use dce_router::request::{PathParam, RequestContext};
+use dce_hyper::protocol::HttpMethod::{Get, Options, Post};
+use dce_router::api::EventHandler;
+use dce_router::request::{PathParam, Context};
 use dce_router::router::Router;
 use dce_router::serializer::JsonSerializer;
 use serde::{Deserialize, Serialize};
@@ -18,25 +17,15 @@ use dce_cli::protocol::CliRaw;
 use dce_hyper::protocol::{Http, HttpGet, HttpRaw, HyperHttpProtocol};
 use dce_hyper::serializer::SailfishSerializer;
 use dce_macro::{api, openly_err};
+use dce_util::mixed::DceResult;
 
 
-/// `RUST_LOG=debug cargo run --bin app --target-dir target/http -- http start`
+/// `set RUST_LOG=debug && cargo run --bin app --target-dir target/http -- http start`
 #[api("http/start")]
 async fn http_start(_: CliRaw) {
     let addr = SocketAddr::from(([127, 0, 0, 1], 2046));
-    let router = Router::new()
-        .set_before_controller(BeforeController::Async(Box::new(|context|
-            Box::pin((|mut context: RequestContext<HttpRawRequest<HyperHttpProtocol>>| async {
-                if context.api()?.path() == "session/{username?}" {
-                    if matches!(context.params().get("username"), Some(PathParam::Opt(Some(_)))) {
-                        context = context.put_data("hello".to_string(), Box::new("attach the to controller"));
-                    } else {
-                        return Err(openly_err!(401, "need to login"));
-                    }
-                }
-                Ok(context)
-            })(context))
-        )))
+    let router = Router::new()?
+        .set_event_handlers(Some(EventHandler::Async(Box::new(|context| Box::pin(interceptor(context))))), None)
         .push(var1)
         .push(var2)
         .push(var3)
@@ -47,7 +36,7 @@ async fn http_start(_: CliRaw) {
         .push(hello)
         .push(hello_post)
         .push(home)
-        .ready();
+        .ready()?;
 
     let listener = TcpListener::bind(addr).await.expect(format!("cannot bind tcp to {}", addr).as_str());
     info!("Dce started at {}:{} with Hyper", addr.ip(), addr.port());
@@ -64,6 +53,17 @@ async fn http_start(_: CliRaw) {
             }
         });
     }
+}
+
+async fn interceptor(context: &mut Context<HyperHttpProtocol>) -> DceResult<()> {
+    if context.api().unwrap().path() == "session/{username?}" {
+        if matches!(context.params().get("username"), Some(PathParam::Option(Some(_)))) {
+            context.put_data("hello".to_string(), Box::new("attach the to controller"));
+        } else {
+            return Err(openly_err!(401, "need to login"));
+        }
+    }
+    Ok(())
 }
 
 /// `curl http://127.0.0.1:2046/var1`
@@ -116,31 +116,31 @@ pub fn var6(req: HttpRaw) {
 /// `curl -I http://127.0.0.1:2046/session`
 #[api("session/{username?}", serializer = JsonSerializer{})]
 pub fn session(req: HttpRaw) {
-    if matches!(req.params().get("username"), Some(PathParam::Opt(Some(username))) if username == "dce") {
-        println!("{:#?}", *req.context_data().get("hello").unwrap().downcast_ref::<&str>().unwrap());
+    if matches!(req.params().get("username"), Some(PathParam::Option(Some(username))) if username == "dce") {
+        println!("{:#?}", *req.data().get("hello").unwrap().downcast_ref::<&str>().unwrap());
         req.success(None)
     } else {
-        println!("{:#?}", req.context_data());
-        req.fail(Some("invalid session".to_string()), 403)
+        println!("{:#?}", req.data());
+        req.fail(Some("invalid manager".to_string()), 403)
     }
 }
 
 /// `curl http://127.0.0.1:2046/hello`
 #[api(method = Get, serializer = JsonSerializer{})]
 pub async fn hello(req: HttpRaw) -> DceResult<Option<HttpResp>> {
-    println!("{:#?}", req.context_data());
+    println!("{:#?}", req);
     req.success(None)
 }
 
 /// `curl -H "Content-Type: application/json" -d "{""user"":""Drunk"",""age"":18}" http://127.0.0.1:2046/hello`
-#[api("hello", method = [Post, Options], serializer = JsonSerializer{})]
-pub async fn hello_post(mut req: Http<GreetingReq, Greeting, Greeting, GreetingResp>) {
+#[api("hello", method = [Post, Options], serializer = [JsonSerializer{}])]
+pub async fn hello_post(mut req: Http<GreetingReq, GreetingResp>) {
     let legal_age = 18;
-    let body = req.req().await?;
+    let body: Greeting = req.req().await?;
     if body.age >= legal_age {
         let mut reqd = body.clone();
         reqd.welcome = format!("Hello {}, welcome", reqd.user);
-        req.success(Some(reqd))
+        req.success(Some(reqd.into()))
     } else {
         req.fail(Some(format!("Sorry, only service for over {} years old peoples", legal_age)), 0)
     }

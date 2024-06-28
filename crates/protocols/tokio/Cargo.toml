@@ -1,20 +1,23 @@
 [package]
 name = "dce-tokio"
 description = "A tcp/udp routable protocol implementation sample for dce-router"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Drunk Tan <hi@idrunk.net>"]
 homepage = "https://drunkce.com"
 documentation = "https://docs.rs/dce-tokio"
 repository = "https://github.com/idrunk/dce-rust"
 keywords = ["tcp", "udp", "router"]
 categories = ["network-programming"]
-license-file = "../../../LICENSE"
+license = "MIT"
 edition = "2021"
 
+[features]
+session = ["dce-router/session"]
+
 [dependencies]
-dce-util = { path = "../../util", version = "0.*" }
-dce-macro = { path = "../../macro", version = "0.*" }
-dce-router = { path = "../../router", version = "0.*" }
+dce-util = { path = "../../util", version = "1.*" }
+dce-macro = { path = "../../macro", version = "1.*" }
+dce-router = { path = "../../router", version = "1.*" }
 async-trait = "0.1.73"
 log = "0.4.20"
 futures-util = { version = "0.3.28", features = ["sink"] }

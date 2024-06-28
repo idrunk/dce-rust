@@ -79,7 +79,7 @@ pub fn api(args: TokenStream, input: TokenStream) -> TokenStream {
 
     TokenStream::from(quote!(
         #input
-        pub fn #route_fn_name() #return_type { #api_scripts }
+        pub fn #route_fn_name<'a>() #return_type { #api_scripts }
     ))
 }
 

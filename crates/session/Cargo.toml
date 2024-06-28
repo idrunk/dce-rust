@@ -1,0 +1,52 @@
+[package]
+name = "dce-session"
+description = "A session lib with user binding and renewable."
+version = "1.0.0"
+authors = ["Drunk Tan <hi@idrunk.net>"]
+homepage = "https://drunkce.com"
+documentation = "https://docs.rs/dce-session"
+repository = "https://github.com/idrunk/dce-rust"
+keywords = ["session", "dce", "api"]
+categories = ["network-programming", "web-programming"]
+license = "MIT"
+edition = "2021"
+
+[lib]
+crate-type = ["lib"]
+
+[features]
+user = []
+connection = []
+auto-renew = []
+async = ["async-trait", "futures"]
+redis-user = ["user", "redis"]
+redis-user-async = ["redis-user", "async"]
+redis-user-auto = ["redis-user", "auto-renew"]
+redis-user-async-auto = ["redis-user-async", "auto-renew"]
+redis-connection = ["redis-user", "connection"]
+redis-connection-async = ["redis-user-async", "connection"]
+redis-connection-async-auto = ["redis-user-async-auto", "connection"]
+test = []
+
+[dependencies]
+dce-util = { path = "../util", version = "1.*" }
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+log = "0.4.20"
+rand = "0.8.5"
+sha2 = "0.10.8"
+async-trait = { version = "0.1.77", optional = true }
+redis = { version = "0.25.2", features = ["tokio-comp"], optional = true }
+futures = { version = "0.3.30", features = ["std"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.32.0", features = ["full"] }
+redis-test = { version = "0.4.0", features = ["aio"] }
+
+[[test]]
+name = "basic"
+required-features = ["test", "redis-user-async"]
+
+[[test]]
+name = "user"
+required-features = ["test", "redis-user-async"]
